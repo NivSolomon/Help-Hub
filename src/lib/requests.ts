@@ -1,106 +1,241 @@
-// src/lib/requests.ts
 import {
-  addDoc, collection, doc, onSnapshot, orderBy, query, serverTimestamp, updateDoc, where,
-  type DocumentData, type QueryDocumentSnapshot
+  collection,
+  doc,
+  onSnapshot,
+  query,
+  where,
+  limit,
+  runTransaction,
+  updateDoc,
+  getFirestore,
+  type DocumentData,
+  type QueryDocumentSnapshot,
+  type Unsubscribe,
 } from "firebase/firestore";
-import { db } from "./firebase";
 import type { HelpRequest } from "./types";
+import { addDoc, serverTimestamp } from "firebase/firestore";
+import { geohashForLocation } from "geofire-common";
 
+const db = getFirestore();
 const col = collection(db, "requests");
 
-export function listenOpenRequests(cb: (items: HelpRequest[]) => void) {
-  const q = query(col, where("status", "==", "open"), orderBy("createdAt", "desc"));
-  return onSnapshot(q, (snap) => {
-    const items = snap.docs.map((d: QueryDocumentSnapshot<DocumentData>) => (
-      { id: d.id, ...d.data() } as HelpRequest
-    ));
-    cb(items);
-  });
-}
+export type CreateRequestInput = {
+  title: string;
+  description: string;
+  category: "errand" | "carry" | "fix" | "other";
+  reward?: number | null;
+  address?: string | null;
+  location: { lat: number; lng: number };
+  geohash?: string;
+  requesterId: string;
+};
 
-/** NEW: open + my accepted (as requester OR helper). */
-export function listenRelevantRequests(
-  myUid: string | null,
-  cb: (items: HelpRequest[]) => void
-) {
-  // 1) All OPEN (for everyone)
-  const qOpen = query(col, where("status", "==", "open"));
+export type MapBounds = { west: number; south: number; east: number; north: number };
 
-  // 2) ACCEPTED where I’m the helper
-  const qAcceptedHelper = myUid
-    ? query(col, where("status", "==", "accepted"), where("helperId", "==", myUid))
-    : null;
-
-  // 3) ACCEPTED where I’m the requester
-  const qAcceptedRequester = myUid
-    ? query(col, where("status", "==", "accepted"), where("requesterId", "==", myUid))
-    : null;
-
-  // Keep a local map and emit a merged, de-duped list
-  const buckets = {
-    open: new Map<string, HelpRequest>(),
-    helper: new Map<string, HelpRequest>(),
-    requester: new Map<string, HelpRequest>(),
-  };
-
-  const emit = () => {
-    const merged = new Map<string, HelpRequest>();
-    for (const m of [buckets.open, buckets.helper, buckets.requester]) {
-      m.forEach((v, k) => merged.set(k, v));
-    }
-    // sort newest first if createdAt exists
-    const items = Array.from(merged.values()).sort((a, b) => {
-      const ca = (a as any).createdAt?.seconds ?? 0;
-      const cb_ = (b as any).createdAt?.seconds ?? 0;
-      return cb_ - ca;
-    });
-    cb(items);
-  };
-
-  const unsubs: Array<() => void> = [];
-
-  unsubs.push(onSnapshot(qOpen, (snap) => {
-    buckets.open.clear();
-    snap.forEach((d) => buckets.open.set(d.id, { id: d.id, ...(d.data() as any) }));
-    emit();
-  }));
-
-  if (qAcceptedHelper) {
-    unsubs.push(onSnapshot(qAcceptedHelper, (snap) => {
-      buckets.helper.clear();
-      snap.forEach((d) => buckets.helper.set(d.id, { id: d.id, ...(d.data() as any) }));
-      emit();
-    }));
+export async function createRequest(input: CreateRequestInput) {
+  if (!input?.requesterId) throw new Error("requesterId is required");
+  if (!input?.location) throw new Error("location is required");
+  if (typeof input.location.lat !== "number" || typeof input.location.lng !== "number") {
+    throw new Error("location must have numeric lat/lng");
   }
 
-  if (qAcceptedRequester) {
-    unsubs.push(onSnapshot(qAcceptedRequester, (snap) => {
-      buckets.requester.clear();
-      snap.forEach((d) => buckets.requester.set(d.id, { id: d.id, ...(d.data() as any) }));
-      emit();
-    }));
-  }
+  const geohash =
+    input.geohash ?? geohashForLocation([input.location.lat, input.location.lng]);
 
-  return () => unsubs.forEach((u) => u());
-}
+  const docBody = {
+    title: input.title?.trim() ?? "",
+    description: input.description?.trim() ?? "",
+    category: input.category ?? "other",
+    reward: input.reward ?? null,
+    address: input.address ?? null,
 
-type NewReq = Omit<HelpRequest, "id" | "createdAt" | "status" | "helperId">;
+    requesterId: input.requesterId,
+    status: "open" as const,
 
-export async function createRequest(data: NewReq) {
-  await addDoc(col, {
-    ...data,
-    status: "open",
+    location: { lat: input.location.lat, lng: input.location.lng },
+    geohash,
     createdAt: serverTimestamp(),
+  };
+
+  const ref = await addDoc(col, docBody);
+  return { id: ref.id, ...docBody };
+}
+
+/** ---------- OPEN-ONLY FEEDS ---------- */
+export function listenOpenRequests(cb: (items: HelpRequest[]) => void): Unsubscribe {
+  const q = query(col, where("status", "==", "open"), limit(500));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const items = snap.docs.map(
+        (d: QueryDocumentSnapshot<DocumentData>) =>
+          ({ id: d.id, ...(d.data() as any) } as HelpRequest)
+      );
+      cb(items);
+    },
+    (err) => {
+      console.error("[listenOpenRequests] error:", err);
+      cb([]);
+    }
+  );
+}
+
+export function listenOpenRequestsNearby(
+  bounds: MapBounds | null,
+  geohashRange: { start: string; end: string } | null,
+  cb: (items: HelpRequest[]) => void
+): Unsubscribe {
+  if (!bounds || !geohashRange) {
+    const unsub = listenOpenRequests((rows) =>
+      cb(bounds ? filterByBounds(rows, bounds) : rows)
+    );
+    return unsub;
+  }
+
+  try {
+    const qOpen = query(
+      col,
+      where("status", "==", "open"),
+      where("geohash", ">=", geohashRange.start),
+      where("geohash", "<=", geohashRange.end),
+      limit(500)
+    );
+    const unsub = onSnapshot(
+      qOpen,
+      (snap) => {
+        const items = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as HelpRequest));
+        cb(items);
+      },
+      (err) => {
+        console.warn("[nearby] index error -> fallback to openOnly:", err);
+        const fUnsub = listenOpenRequests((rows) => cb(filterByBounds(rows, bounds)));
+        const chained: Unsubscribe = () => {
+          try { unsub(); } catch {}
+          try { fUnsub(); } catch {}
+        };
+        (chained as any).__chained = true;
+        return chained;
+      }
+    );
+    return unsub;
+  } catch (e) {
+    console.error("[nearby] build query failed:", e);
+    return listenOpenRequests((rows) => cb(filterByBounds(rows, bounds)));
+  }
+}
+
+function filterByBounds(rows: HelpRequest[], b: MapBounds) {
+  return rows.filter((r) => {
+    const loc = r.location;
+    if (!loc) return false;
+    return loc.lng >= b.west && loc.lng <= b.east && loc.lat >= b.south && loc.lat <= b.north;
   });
 }
 
-export async function acceptRequest(reqId: string, helperId: string) {
-  await updateDoc(doc(db, "requests", reqId), {
-    helperId,
-    status: "accepted",
+/** ---------- PARTICIPATING FEED (requester or helper) ---------- */
+/** Keep requests visible for both users after acceptance. */
+export function listenParticipatingRequests(
+  myId: string,
+  cb: (items: HelpRequest[]) => void
+): Unsubscribe {
+  // requester side (accepted or in_progress)
+  const qReqAccepted = query(col, where("requesterId", "==", myId), where("status", "==", "accepted"));
+  const qReqInProg  = query(col, where("requesterId", "==", myId), where("status", "==", "in_progress"));
+
+  // helper side (accepted or in_progress)
+  const qHelpAccepted = query(col, where("helperId", "==", myId), where("status", "==", "accepted"));
+  const qHelpInProg   = query(col, where("helperId", "==", myId), where("status", "==", "in_progress"));
+
+  const unsubs: Unsubscribe[] = [];
+  const bag = new Map<string, HelpRequest>();
+
+  function emit() {
+    cb(Array.from(bag.values()));
+  }
+function upsertFromSnapshot(snap: any) {
+  snap.docChanges().forEach((change: any) => {
+    const d = change.doc;
+    if (change.type === "removed" || d.data().status === "done") {
+      bag.delete(d.id);
+    } else {
+      bag.set(d.id, { id: d.id, ...(d.data() as any) } as HelpRequest);
+    }
+  });
+  cb(Array.from(bag.values()));
+}
+
+  function removeMissing(snap: any) {
+    const ids = new Set(snap.docs.map((d: any) => d.id));
+    for (const id of bag.keys()) {
+      // prune only those owned by this query scope? Fine to keep; other queries keep them.
+      if (!ids.has(id)) continue;
+    }
+    emit();
+  }
+
+  unsubs.push(
+    onSnapshot(qReqAccepted, (s) => upsertFromSnapshot(s)),
+    onSnapshot(qReqInProg,  (s) => upsertFromSnapshot(s)),
+    onSnapshot(qHelpAccepted, (s) => upsertFromSnapshot(s)),
+    onSnapshot(qHelpInProg,   (s) => upsertFromSnapshot(s)),
+  );
+
+  return () => unsubs.forEach((u) => { try { u(); } catch {} });
+}
+
+/** ---------- STATE CHANGES ---------- */
+
+/** Race-safe accept; default status becomes 'in_progress' so UI turns orange and chat is enabled. */
+export async function acceptRequestAtomic(
+  reqId: string,
+  helperId: string,
+  nextStatus: "accepted" | "in_progress" = "accepted"
+) {
+  const ref = doc(db, "requests", reqId);
+  await runTransaction(db, async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists()) throw new Error("Request not found");
+    const r = snap.data() as any;
+    if (r.status !== "open" || r.helperId) throw new Error("Already accepted");
+    tx.update(ref, { helperId, status: nextStatus });
   });
 }
 
 export async function markDone(reqId: string) {
   await updateDoc(doc(db, "requests", reqId), { status: "done" });
+}
+
+// --- User history (requester OR helper, any status) ---
+export function listenUserHistory(
+  myId: string,
+  cb: (items: HelpRequest[]) => void
+): Unsubscribe {
+  const qReq = query(col, where("requesterId", "==", myId), limit(500));
+  const qHelp = query(col, where("helperId", "==", myId), limit(500));
+
+  const bag = new Map<string, HelpRequest>();
+  const unsubs: Unsubscribe[] = [];
+
+  function applySnap(snap: any) {
+    snap.docChanges().forEach((c: any) => {
+      const d = c.doc;
+      if (c.type === "removed") {
+        bag.delete(d.id);
+      } else {
+        bag.set(d.id, { id: d.id, ...(d.data() as any) } as HelpRequest);
+      }
+    });
+    // Sort newest first (createdAt may be null briefly)
+    const rows = Array.from(bag.values()).sort((a, b) => {
+      const ta = (a as any).createdAt?.toMillis?.() ?? 0;
+      const tb = (b as any).createdAt?.toMillis?.() ?? 0;
+      return tb - ta;
+    });
+    cb(rows);
+  }
+
+  unsubs.push(onSnapshot(qReq, applySnap));
+  unsubs.push(onSnapshot(qHelp, applySnap));
+
+  return () => unsubs.forEach((u) => { try { u(); } catch {} });
 }

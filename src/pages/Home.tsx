@@ -1,36 +1,124 @@
+import React from "react";
 import AuthGate from "../components/AuthGate";
-import { useEffect, useMemo, useState } from "react";
-import { listenRelevantRequests, acceptRequest, markDone } from "../lib/requests";
-import type { HelpRequest } from "../lib/types";
-import { CATEGORIES, type Category } from "../lib/types";
-import NewRequestModal from "../components/NewRequestModal";
 import MapView from "../components/MapView";
 import ChatPanel from "../components/ChatPanel";
-import { getOrCreateChat } from "../lib/chat";
-import { haversineKm } from "../lib/geo";
+import NewRequestModal from "../components/NewRequestModal";
+import type { HelpRequest } from "../lib/types";
 import { useAuthUser } from "../lib/useAuthUser";
+import {
+  listenOpenRequests,
+  listenOpenRequestsNearby,
+  listenParticipatingRequests,
+  type MapBounds,
+  acceptRequestAtomic,
+  markDone as markDoneApi,
+} from "../lib/requests";
+import { haversineKm } from "../lib/geo";
+import { geohashQueryBounds } from "geofire-common";
+import { CATEGORIES, type Category } from "../lib/types";
+import { getOrCreateChat, listenMessages } from "../lib/chat";
+import { ToastContainer, toast } from "react-toastify";
+import "react-toastify/dist/ReactToastify.css";
 
 export default function Home() {
-  const [items, setItems] = useState<HelpRequest[]>([]);
-  const [open, setOpen] = useState(false);
-  const [center, setCenter] = useState<{ lat: number; lng: number }>({
-    lat: 32.0853,
-    lng: 34.7818, // Tel Aviv default
-  });
-  const [userLoc, setUserLoc] = useState<{ lat: number; lng: number }>();
-  const [chatId, setChatId] = useState<string | null>(null);
-
-  // Filters
-  const [radiusKm, setRadiusKm] = useState<number>(5);
-  const [categoryFilter, setCategoryFilter] = useState<Category | "all">("all");
-
+  const [openItems, setOpenItems] = React.useState<HelpRequest[]>([]);
+  const [participating, setParticipating] = React.useState<HelpRequest[]>([]);
+  const [open, setOpen] = React.useState(false);
+  const [center, setCenter] = React.useState({ lat: 32.0853, lng: 34.7818 });
+  const [userLoc, setUserLoc] = React.useState<{ lat: number; lng: number }>();
+  const [selectedId, setSelectedId] = React.useState<string>();
+  const [selectedTick, setSelectedTick] = React.useState(0);
+  const [chatId, setChatId] = React.useState<string | null>(null);
+  const [radiusKm, setRadiusKm] = React.useState(5);
+  const [categoryFilter, setCategoryFilter] =
+    React.useState<Category | "all">("all");
+  const [mapBounds, setMapBounds] = React.useState<MapBounds | null>(null);
   const user = useAuthUser();
   const myId = user?.uid ?? null;
+
+  // initial location
+  React.useEffect(() => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+        setCenter(c);
+        setUserLoc(c);
+      },
+      () => {},
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  }, []);
+
+  // open-only
+  React.useEffect(() => {
+    const unsub = listenOpenRequests(setOpenItems);
+    return () => unsub();
+  }, []);
+
+  // nearby open
+  React.useEffect(() => {
+    if (!mapBounds) return;
+    let range: { start: string; end: string } | null = null;
+    try {
+      const bounds = geohashQueryBounds(
+        [mapBounds.south, mapBounds.west],
+        [mapBounds.north, mapBounds.east]
+      );
+      if (bounds?.length > 0) {
+        const [start, end] = bounds[0];
+        range = { start, end };
+      }
+    } catch {
+      range = null;
+    }
+    const unsub = listenOpenRequestsNearby(mapBounds, range, setOpenItems);
+    return () => unsub();
+  }, [mapBounds]);
+
+  // keep accepted/in_progress for both users
+  React.useEffect(() => {
+    if (!myId) return;
+    const unsub = listenParticipatingRequests(myId, setParticipating);
+    return () => unsub();
+  }, [myId]);
+
+  // merge open + participating
+  const items = React.useMemo(() => {
+    const map = new Map<string, HelpRequest>();
+    for (const r of openItems) map.set(r.id, r);
+    for (const r of participating) map.set(r.id, r);
+    return Array.from(map.values());
+  }, [openItems, participating]);
+
+  // derived + filters + sort
+  const filtered = React.useMemo(() => {
+    const withDist = items.map((r) => {
+      const dist = userLoc && r.location ? haversineKm(userLoc, r.location) : null;
+      return { ...r, __distanceKm: dist as number | null };
+    });
+    const byCategory =
+      categoryFilter === "all"
+        ? withDist
+        : withDist.filter((r) => r.category === categoryFilter);
+    const byRadius =
+      userLoc && radiusKm > 0
+        ? byCategory.filter(
+            (r) => r.__distanceKm != null && r.__distanceKm <= radiusKm
+          )
+        : byCategory;
+    const sorted = [...byRadius].sort((a, b) => {
+      if (a.__distanceKm == null && b.__distanceKm == null) return 0;
+      if (a.__distanceKm == null) return 1;
+      if (b.__distanceKm == null) return -1;
+      return a.__distanceKm - b.__distanceKm;
+    });
+    return sorted;
+  }, [items, userLoc, categoryFilter, radiusKm]);
 
   async function openChatFor(req: HelpRequest) {
     if (!myId || !req.helperId) return;
     const other = req.requesterId === myId ? req.helperId : req.requesterId;
-
     try {
       if (!chatId) setChatId("pending");
       const chat = await getOrCreateChat(req.id, myId, other);
@@ -42,55 +130,85 @@ export default function Home() {
     }
   }
 
-  // Geo
-  useEffect(() => {
-    if (!navigator.geolocation) return;
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        const c = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        setCenter(c);
-        setUserLoc(c);
-      },
-      () => {},
-      { enableHighAccuracy: true, timeout: 5000 }
-    );
-  }, []);
-
-  // Subscribe to relevant requests (reactive to auth)
-  useEffect(() => {
-    const unsub = listenRelevantRequests(myId, setItems);
-    return () => unsub();
-  }, [myId]);
-
-  // Derived: distance + category + radius + sorted
-  const filtered = useMemo(() => {
-    const withDist = items.map((r) => {
-      const dist =
-        userLoc && r.location ? haversineKm(userLoc, r.location) : null;
-      return { ...r, __distanceKm: dist as number | null };
-    });
-
-    let arr =
-      categoryFilter === "all"
-        ? withDist
-        : withDist.filter((r) => r.category === categoryFilter);
-
-    // ALWAYS apply radius when we know the user's location.
-    if (userLoc && radiusKm > 0) {
-      arr = arr.filter(
-        (r) => r.__distanceKm != null && r.__distanceKm <= radiusKm
-      );
+  // accept + open chat
+  async function handleAcceptAndChat(req: HelpRequest) {
+    if (!myId || myId === req.requesterId) return;
+    try {
+      await acceptRequestAtomic(req.id, myId, "accepted");
+      await openChatFor({
+        ...req,
+        helperId: myId,
+        status: "accepted",
+      } as HelpRequest);
+    } catch {
+      alert("This request was accepted by someone else.");
     }
+  }
 
-    arr.sort((a, b) => {
-      if (a.__distanceKm == null && b.__distanceKm == null) return 0;
-      if (a.__distanceKm == null) return 1;
-      if (b.__distanceKm == null) return -1;
-      return a.__distanceKm - b.__distanceKm;
-    });
+async function markDone(reqId: string) {
+  try {
+    // Optimistically remove from UI
+    setParticipating((prev) => prev.filter((r) => r.id !== reqId));
+    setOpenItems((prev) => prev.filter((r) => r.id !== reqId));
 
-    return arr;
-  }, [items, userLoc, categoryFilter, radiusKm]);
+    // Update Firestore
+    await markDoneApi(reqId);
+
+    toast.success("Marked as done ✅", { position: "bottom-right", autoClose: 3000 });
+  } catch (err) {
+    console.error("markDone failed:", err);
+    toast.error("Failed to mark as done");
+  }
+}
+
+
+  // Toastify incoming messages
+  const chatSubsRef = React.useRef<Record<string, () => void>>({});
+  const lastMsgRef = React.useRef<Record<string, string>>({});
+  React.useEffect(() => {
+    if (!myId) return;
+    const mine = participating.filter(
+      (r) =>
+        (r.helperId &&
+          (r.helperId === myId || r.requesterId === myId)) &&
+        (r.status === "in_progress" || r.status === "accepted")
+    );
+    const existing = chatSubsRef.current;
+    const stillNeeded: Record<string, true> = {};
+    (async () => {
+      for (const r of mine) {
+        const other = r.requesterId === myId ? r.helperId! : r.requesterId;
+        const chat = await getOrCreateChat(r.id, myId, other);
+        const cid = chat.id;
+        stillNeeded[cid] = true;
+        if (existing[cid]) continue;
+        const unsub = listenMessages(cid, (msgs) => {
+          if (!Array.isArray(msgs) || msgs.length === 0) return;
+          const last = msgs[msgs.length - 1];
+          if (last.senderId === myId) return;
+          if (lastMsgRef.current[cid] === last.id) return;
+          if (chatId === cid) return;
+          lastMsgRef.current[cid] = last.id;
+          toast.info(last.text, {
+            position: "bottom-right",
+            autoClose: 6000,
+            closeOnClick: true,
+            onClick: () => openChatFor(r),
+          });
+        });
+        existing[cid] = unsub;
+      }
+      for (const [cid, u] of Object.entries(existing)) {
+        if (!stillNeeded[cid]) {
+          try {
+            u();
+          } catch {}
+          delete existing[cid];
+          delete lastMsgRef.current[cid];
+        }
+      }
+    })();
+  }, [participating, myId, chatId]);
 
   return (
     <AuthGate>
@@ -105,10 +223,9 @@ export default function Home() {
           </button>
         </div>
 
-        {/* Filter Bar */}
+        {/* Filters */}
         <div className="rounded-xl border p-3">
           <div className="grid gap-3 sm:grid-cols-4">
-            {/* Radius */}
             <div>
               <label className="block text-sm font-medium">Radius (km)</label>
               <input
@@ -120,16 +237,14 @@ export default function Home() {
                   setRadiusKm(Math.max(0, Number(e.target.value)))
                 }
                 className="mt-1 w-full rounded-lg border p-2"
-                placeholder="e.g., 5"
               />
               <p className="mt-1 text-xs text-gray-500">
                 {userLoc
-                  ? "Filtering by your current location"
-                  : "Enable location to filter by distance"}
+                  ? "Measured from your location"
+                  : "Enable location to use distance"}
               </p>
             </div>
 
-            {/* Category */}
             <div>
               <label className="block text-sm font-medium">Category</label>
               <select
@@ -154,7 +269,6 @@ export default function Home() {
               </select>
             </div>
 
-            {/* Reset */}
             <div className="flex items-end justify-start sm:justify-end">
               <button
                 onClick={() => {
@@ -170,28 +284,39 @@ export default function Home() {
         </div>
 
         {/* Map */}
-        <div className={open ? "opacity-40 pointer-events-none" : ""}>
-          <MapView
-            center={center}
-            requests={filtered}
-            className={open ? "opacity-40 pointer-events-none" : ""}
-            userLoc={userLoc}
-            onOpenChat={(req) => openChatFor(req)}
-          />
-        </div>
+        <MapView
+          center={center}
+          requests={filtered}
+          className={open ? "opacity-40 pointer-events-none" : ""}
+          userLoc={userLoc}
+          selectedId={selectedId}
+          selectedTick={selectedTick}
+          onOpenChat={(req) => openChatFor(req)}
+          onAccept={(req) => handleAcceptAndChat(req)}
+          onBoundsChange={(b) => setMapBounds(b)}
+          onLocated={(loc) => setUserLoc(loc)}
+        />
 
         {/* List */}
         <ul className="divide-y rounded-xl border">
           {filtered.map((r) => {
-            const iAmRequester = myId != null && r.requesterId === myId;
-            const iAmHelper = myId != null && r.helperId === myId;
+            const iAmRequester = r.requesterId === myId;
+            const iAmHelper = r.helperId === myId;
             const iAmParticipant = iAmRequester || iAmHelper;
-
             return (
               <li key={r.id} className="p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="font-medium">{r.title}</div>
+                    <button
+                      className="font-medium hover:underline"
+                      onClick={() => {
+                        setSelectedId(r.id);
+                        setSelectedTick((t) => t + 1);
+                      }}
+                      title="Focus on map"
+                    >
+                      {r.title}
+                    </button>
                     <div className="text-sm text-gray-600">{r.description}</div>
                     <div className="mt-1 text-xs text-gray-500">
                       {r.category} • {r.status}
@@ -201,34 +326,33 @@ export default function Home() {
                       )}
                     </div>
                   </div>
-
                   <div className="flex flex-wrap gap-2">
                     {r.status === "open" && myId && !iAmRequester && (
                       <button
-                        onClick={() => acceptRequest(r.id, myId)}
+                        onClick={() => handleAcceptAndChat(r)}
                         className="rounded bg-black px-3 py-1 text-sm text-white hover:opacity-90"
                       >
                         I can help
                       </button>
                     )}
-
-                    {r.status === "accepted" && iAmParticipant && (
-                      <button
-                        onClick={() => openChatFor(r)}
-                        className="rounded border px-3 py-1 text-sm hover:bg-gray-50"
-                      >
-                        Open chat
-                      </button>
-                    )}
-
-                    {r.status === "accepted" && iAmHelper && (
-                      <button
-                        onClick={() => markDone(r.id)}
-                        className="rounded border px-3 py-1 text-sm hover:bg-gray-50"
-                      >
-                        Mark done
-                      </button>
-                    )}
+                    {(r.status === "in_progress" || r.status === "accepted") &&
+                      iAmParticipant && (
+                        <button
+                          onClick={() => openChatFor(r)}
+                          className="rounded border px-3 py-1 text-sm hover:bg-gray-50"
+                        >
+                          Open chat
+                        </button>
+                      )}
+                    {(r.status === "in_progress" || r.status === "accepted") &&
+                      iAmHelper && (
+                        <button
+                          onClick={() => markDone(r.id)}
+                          className="rounded border px-3 py-1 text-sm hover:bg-gray-50"
+                        >
+                          Mark done
+                        </button>
+                      )}
                   </div>
                 </div>
               </li>
@@ -237,7 +361,7 @@ export default function Home() {
           {filtered.length === 0 && (
             <li className="p-4 text-gray-500">
               {userLoc
-                ? "No requests within your radius."
+                ? "No requests match your filters."
                 : "Enable location to filter by distance, or adjust filters."}
             </li>
           )}
@@ -249,8 +373,10 @@ export default function Home() {
         onClose={() => setOpen(false)}
         userLocation={userLoc}
       />
-
-      {chatId && <ChatPanel chatId={chatId} onClose={() => setChatId(null)} />}
+      {chatId && chatId !== "pending" && (
+        <ChatPanel chatId={chatId} onClose={() => setChatId(null)} />
+      )}
+      <ToastContainer />
     </AuthGate>
   );
 }

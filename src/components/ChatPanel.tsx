@@ -1,7 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import { auth } from "../lib/firebase";
 import { listenMessages, sendMessage, type ChatMessage } from "../lib/chat";
+
+// Lazy load the picker to keep initial bundle small
+const EmojiPicker = lazy(() => import("emoji-picker-react"));
 
 type Props = {
   chatId: string;
@@ -9,11 +12,9 @@ type Props = {
 };
 
 export default function ChatPanel({ chatId, onClose }: Props) {
-  // Render nothing until we have a body (SSR safety)
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   if (!mounted) return null;
-
   return createPortal(<ChatSurface chatId={chatId} onClose={onClose} />, document.body);
 }
 
@@ -21,6 +22,11 @@ function ChatSurface({ chatId, onClose }: Props) {
   const [msgs, setMsgs] = useState<ChatMessage[]>([]);
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // emoji picker state
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!chatId) return;
@@ -29,9 +35,21 @@ function ChatSurface({ chatId, onClose }: Props) {
   }, [chatId]);
 
   useEffect(() => {
-    // auto scroll to bottom on new messages
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs.length]);
+
+  // close picker on outside click
+  useEffect(() => {
+    function onDocClick(e: MouseEvent) {
+      if (!pickerOpen) return;
+      const target = e.target as Node;
+      if (pickerRef.current && !pickerRef.current.contains(target)) {
+        setPickerOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [pickerOpen]);
 
   async function submit() {
     const me = auth.currentUser?.uid;
@@ -39,16 +57,29 @@ function ChatSurface({ chatId, onClose }: Props) {
     if (!me || !t) return;
     await sendMessage(chatId, me, t);
     setText("");
+    inputRef.current?.focus();
+  }
+
+  // insert selected emoji at the caret
+  function insertEmoji(emoji: string) {
+    const el = inputRef.current;
+    if (!el) return;
+    const start = el.selectionStart ?? text.length;
+    const end = el.selectionEnd ?? text.length;
+    const next = text.slice(0, start) + emoji + text.slice(end);
+    setText(next);
+    requestAnimationFrame(() => {
+      el.focus();
+      const caret = start + emoji.length;
+      el.setSelectionRange(caret, caret);
+    });
   }
 
   return (
     <>
       {/* Backdrop */}
-      <div
-        className="fixed inset-0 z-[1000] bg-black/30"
-        onClick={onClose}
-        aria-hidden="true"
-      />
+      <div className="fixed inset-0 z-[1000] bg-black/30" onClick={onClose} aria-hidden="true" />
+
       {/* Panel */}
       <div
         className="
@@ -80,7 +111,7 @@ function ChatSurface({ chatId, onClose }: Props) {
               return (
                 <div key={m.id} className={`mb-2 flex ${mine ? "justify-end" : "justify-start"}`}>
                   <div
-                    className={`rounded-2xl px-3 py-2 text-sm ${
+                    className={`whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${
                       mine ? "bg-black text-white" : "bg-gray-100"
                     }`}
                   >
@@ -95,21 +126,59 @@ function ChatSurface({ chatId, onClose }: Props) {
           </div>
 
           {/* Composer */}
-          <div className="flex gap-2 border-t p-3">
-            <input
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && submit()}
-              className="w-full rounded-lg border px-3 py-2 text-sm"
-              placeholder="Type a message…"
-            />
-            <button
-              onClick={submit}
-              className="rounded-lg bg-black px-3 py-2 text-sm text-white disabled:opacity-50"
-              disabled={!text.trim()}
-            >
-              Send
-            </button>
+          <div className="relative border-t p-3">
+            <div className="flex gap-2">
+              <button
+                type="button"
+                aria-label="Insert emoji"
+                className="inline-flex h-10 w-10 items-center justify-center rounded-lg border hover:bg-gray-50"
+                onClick={() => setPickerOpen((v) => !v)}
+              >
+                😊
+              </button>
+
+              <input
+                ref={inputRef}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && submit()}
+                className="w-full rounded-lg border px-3 py-2 text-sm"
+                placeholder="Type a message…"
+              />
+
+              <button
+                onClick={submit}
+                className="rounded-lg bg-black px-3 py-2 text-sm text-white disabled:opacity-50"
+                disabled={!text.trim()}
+              >
+                Send
+              </button>
+            </div>
+
+            {pickerOpen && (
+              <div
+                ref={pickerRef}
+                className="
+                  absolute bottom-[3.25rem] left-3 z-[1002]
+                  w-[350px] rounded-xl border bg-white shadow-2xl
+                "
+              >
+                <Suspense fallback={<div className="p-4 text-sm text-gray-500">Loading emojis…</div>}>
+                  {/* emoji-picker-react uses onEmojiClick({emoji, ...}) */}
+                  <EmojiPicker
+                    onEmojiClick={(e: any) => insertEmoji(e.emoji)}
+                    lazyLoadEmojis
+                    searchDisabled={false}
+                    suggestedEmojisMode="recent"
+                    previewConfig={{ showPreview: false }}
+                    height={360}
+                    width="100%"
+                    skinTonesDisabled={false}
+                    autoFocusSearch={false}
+                  />
+                </Suspense>
+              </div>
+            )}
           </div>
         </div>
       </div>
