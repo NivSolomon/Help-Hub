@@ -239,3 +239,36 @@ export function listenUserHistory(
 
   return () => unsubs.forEach((u) => { try { u(); } catch {} });
 }
+
+export function listenMyRequests(
+  uid: string,
+  callback: (reqs: HelpRequest[]) => void
+) {
+  const q1 = query(collection(db, "requests"), where("requesterId", "==", uid));
+  const q2 = query(collection(db, "requests"), where("helperId", "==", uid));
+
+  const allReqs: Record<string, HelpRequest> = {};
+
+  const unsub1 = onSnapshot(q1, (snap) => {
+    snap.docChanges().forEach((c) => {
+      const d = { id: c.doc.id, ...(c.doc.data() as HelpRequest) };
+      if (c.type === "removed") delete allReqs[d.id];
+      else allReqs[d.id] = d;
+    });
+    callback(Object.values(allReqs));
+  });
+
+  const unsub2 = onSnapshot(q2, (snap) => {
+    snap.docChanges().forEach((c) => {
+      const d = { id: c.doc.id, ...(c.doc.data() as HelpRequest) };
+      if (c.type === "removed") delete allReqs[d.id];
+      else allReqs[d.id] = d;
+    });
+    callback(Object.values(allReqs));
+  });
+
+  return () => {
+    unsub1();
+    unsub2();
+  };
+}

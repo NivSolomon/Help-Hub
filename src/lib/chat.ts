@@ -65,7 +65,8 @@ export async function getOrCreateChat(
 
 export function listenMessages(chatId: string, cb: (msgs: ChatMessage[]) => void) {
   const col = collection(db, "chats", chatId, "messages");
-  const q = query(col, orderBy("createdAt", "asc"));
+  // NOTE: add secondary orderBy on __name__ (doc id) for stability
+  const q = query(col, orderBy("createdAt", "asc"), orderBy("__name__", "asc"));
   return onSnapshot(q, (snap) => {
     const msgs = snap.docs.map((d: QueryDocumentSnapshot<DocumentData>) => {
       return { id: d.id, ...(d.data() as DocumentData) } as ChatMessage;

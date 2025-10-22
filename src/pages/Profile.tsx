@@ -1,7 +1,13 @@
+// src/pages/Profile.tsx
 import { useEffect, useRef, useState, useMemo } from "react";
 import AuthGate from "../components/AuthGate";
 import { auth } from "../lib/firebase";
 import { onAuthStateChanged, updateProfile, type User } from "firebase/auth";
+
+// ➕ Birthdate/profile hooks
+import { useUserProfile } from "../lib/useAuthUser";
+import { saveBirthdate } from "../lib/users";
+
 import type { HelpRequest } from "../lib/types";
 import { listenUserHistory } from "../lib/requests";
 
@@ -45,6 +51,9 @@ export default function Profile() {
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // 🔄 Live profile doc (for birth date)
+  const profile = useUserProfile(user?.uid);
 
   // History (live)
   const [history, setHistory] = useState<HelpRequest[] | null>(null);
@@ -222,8 +231,9 @@ export default function Profile() {
               </div>
             </div>
 
-            <div className="grid sm:grid-cols-2 gap-4">
-              <div>
+            {/* Editable fields (incl. Birth date) */}
+            <div className="grid sm:grid-cols-3 gap-4">
+              <div className="sm:col-span-1">
                 <label className="block text-sm font-medium mb-1">Display name</label>
                 <input
                   type="text"
@@ -233,7 +243,7 @@ export default function Profile() {
                   placeholder="Your name"
                 />
               </div>
-              <div>
+              <div className="sm:col-span-1">
                 <label className="block text-sm font-medium mb-1">Email</label>
                 <input
                   type="email"
@@ -241,6 +251,21 @@ export default function Profile() {
                   value={user?.email ?? ""}
                   className="w-full border rounded-lg p-2 bg-gray-100 text-gray-600"
                 />
+              </div>
+
+              {/* ➕ Birth date field (streams from Firestore and saves on change) */}
+              <div className="sm:col-span-1">
+                <label className="block text-sm font-medium mb-1">Birth date</label>
+                <input
+                  type="date"
+                  value={profile?.birthdateISO ?? ""}
+                  onChange={async (e) => {
+                    if (!user?.uid) return;
+                    await saveBirthdate(user.uid, e.target.value);
+                  }}
+                  className="w-full border rounded-lg p-2"
+                />
+                <p className="text-xs text-gray-500 mt-1">Auto-filled from Google when permitted.</p>
               </div>
             </div>
 
@@ -415,7 +440,6 @@ export default function Profile() {
                   Previous
                 </button>
 
-                {/* Simple page numbers (compact for small counts) */}
                 <div className="hidden sm:flex items-center gap-1">
                   {Array.from({ length: pageCount }).map((_, i) => {
                     const p = i + 1;

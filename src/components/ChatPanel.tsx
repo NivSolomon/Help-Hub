@@ -3,28 +3,29 @@ import { createPortal } from "react-dom";
 import { auth } from "../lib/firebase";
 import { listenMessages, sendMessage, type ChatMessage } from "../lib/chat";
 
-// Lazy load the picker to keep initial bundle small
 const EmojiPicker = lazy(() => import("emoji-picker-react"));
 
-type Props = {
+type ChatPanelProps = {
   chatId: string;
   onClose: () => void;
+  // ✅ new, for clarity
+  requestTitle?: string;
+  otherUser?: { uid: string; name?: string | null; phone?: string | null };
 };
 
-export default function ChatPanel({ chatId, onClose }: Props) {
+export default function ChatPanel(props: ChatPanelProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
   if (!mounted) return null;
-  return createPortal(<ChatSurface chatId={chatId} onClose={onClose} />, document.body);
+  return createPortal(<ChatSurface {...props} />, document.body);
 }
 
-function ChatSurface({ chatId, onClose }: Props) {
+function ChatSurface({ chatId, onClose, requestTitle, otherUser }: ChatPanelProps) {
   const [msgs, setMsgs] = useState<ChatMessage[]>([]);
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // emoji picker state
   const [pickerOpen, setPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
 
@@ -38,7 +39,6 @@ function ChatSurface({ chatId, onClose }: Props) {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
   }, [msgs.length]);
 
-  // close picker on outside click
   useEffect(() => {
     function onDocClick(e: MouseEvent) {
       if (!pickerOpen) return;
@@ -60,7 +60,6 @@ function ChatSurface({ chatId, onClose }: Props) {
     inputRef.current?.focus();
   }
 
-  // insert selected emoji at the caret
   function insertEmoji(emoji: string) {
     const el = inputRef.current;
     if (!el) return;
@@ -74,6 +73,9 @@ function ChatSurface({ chatId, onClose }: Props) {
       el.setSelectionRange(caret, caret);
     });
   }
+
+  const otherName = otherUser?.name ?? "Unknown user";
+  const phone = otherUser?.phone ?? undefined;
 
   return (
     <>
@@ -94,7 +96,13 @@ function ChatSurface({ chatId, onClose }: Props) {
         <div className="rounded-2xl border bg-white shadow-2xl">
           {/* Header */}
           <div className="flex items-center justify-between border-b px-4 py-3">
-            <h3 className="text-sm font-semibold">Chat</h3>
+            <div className="min-w-0">
+              <div className="truncate text-sm font-semibold">{otherName}</div>
+              <div className="truncate text-xs text-gray-500">
+                {requestTitle ? <>Request: {requestTitle}</> : null}
+                {phone ? <>{requestTitle ? " • " : ""}Phone: {phone}</> : null}
+              </div>
+            </div>
             <button
               onClick={onClose}
               aria-label="Close chat"
@@ -106,6 +114,12 @@ function ChatSurface({ chatId, onClose }: Props) {
 
           {/* Messages */}
           <div ref={listRef} className="max-h-[55vh] overflow-y-auto px-4 py-3 sm:max-h-[50vh]">
+            {/* Optional intro chip */}
+            <div className="mb-3 text-center text-[11px] text-gray-500">
+              You’re chatting with <span className="font-medium text-gray-700">{otherName}</span>
+              {phone ? <> — reach them at <span className="font-medium">{phone}</span></> : null}
+            </div>
+
             {msgs.map((m) => {
               const mine = m.senderId === auth.currentUser?.uid;
               return (
@@ -164,7 +178,6 @@ function ChatSurface({ chatId, onClose }: Props) {
                 "
               >
                 <Suspense fallback={<div className="p-4 text-sm text-gray-500">Loading emojis…</div>}>
-                  {/* emoji-picker-react uses onEmojiClick({emoji, ...}) */}
                   <EmojiPicker
                     onEmojiClick={(e: any) => insertEmoji(e.emoji)}
                     lazyLoadEmojis
