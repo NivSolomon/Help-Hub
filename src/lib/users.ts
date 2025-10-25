@@ -1,14 +1,31 @@
-// src/lib/users.ts
-import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import {
+  doc,
+  getDoc,
+  setDoc,
+  updateDoc,
+  serverTimestamp,
+  onSnapshot,
+} from "firebase/firestore";
 import { db } from "./firebase";
 import { useEffect, useState } from "react";
 
 export type UserProfile = {
-  birthdateISO?: string | null;     // "YYYY-MM-DD"
-  birthdateSetAt?: any;             // Firestore Timestamp
-  displayName?: string | null;
+  // basic identity
+  firstName?: string | null;
+  lastName?: string | null;
+  displayName?: string | null; // may mirror "FirstName LastName"
   photoURL?: string | null;
   email?: string | null;
+
+  // contact
+  phone?: string | null;
+  address?: string | null;
+
+  // age
+  birthdateISO?: string | null; // "YYYY-MM-DD"
+  birthdateSetAt?: any; // Firestore Timestamp
+
+  // audit
   createdAt?: any;
   updatedAt?: any;
 };
@@ -17,7 +34,7 @@ export function userDocRef(uid: string) {
   return doc(db, "users", uid);
 }
 
-// Ensure a user doc exists (idempotent)
+// make sure a doc exists
 export async function ensureUserDoc(
   uid: string,
   seed: Partial<UserProfile> = {}
@@ -26,9 +43,16 @@ export async function ensureUserDoc(
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     const body: UserProfile = {
-      displayName: seed.displayName ?? null,
+      firstName: seed.firstName ?? null,
+      lastName: seed.lastName ?? null,
+      displayName:
+        seed.displayName ??
+        [seed.firstName, seed.lastName].filter(Boolean).join(" ") ??
+        null,
       photoURL: seed.photoURL ?? null,
       email: seed.email ?? null,
+      phone: seed.phone ?? null,
+      address: seed.address ?? null,
       birthdateISO: seed.birthdateISO ?? null,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
@@ -39,45 +63,60 @@ export async function ensureUserDoc(
   return snap.data() as UserProfile;
 }
 
-// src/lib/users.ts
+// NEW: save onboarding data (first run)
+export async function saveOnboardingProfile(
+  uid: string,
+  data: {
+    firstName: string;
+    lastName: string;
+    birthdateISO: string;
+    phone: string;
+    address: string;
+  }
+) {
+  const ref = userDocRef(uid);
+
+  // simple "full display name"
+  const displayName = `${data.firstName} ${data.lastName}`.trim();
+
+  await updateDoc(ref, {
+    firstName: data.firstName,
+    lastName: data.lastName,
+    displayName,
+    birthdateISO: data.birthdateISO,
+    birthdateSetAt: serverTimestamp(),
+    phone: data.phone,
+    address: data.address,
+    updatedAt: serverTimestamp(),
+  });
+}
+
+// (kept for backwards compat in other places if you still call it)
 export async function saveBirthdate(uid: string, iso: string) {
-  // tiny guard to keep data clean
-  const norm = /^\d{4}-\d{2}-\d{2}$/.test(iso)
-    ? iso
-    : (() => {
-        const d = new Date(iso);
-        if (Number.isNaN(d.getTime())) return null;
-        const mm = String(d.getMonth() + 1).padStart(2, "0");
-        const dd = String(d.getDate()).padStart(2, "0");
-        const yyyy = String(d.getFullYear());
-        return `${yyyy}-${mm}-${dd}`;
-      })();
-
-  if (!norm) throw new Error("Invalid date");
-
   const ref = userDocRef(uid);
   await updateDoc(ref, {
-    birthdateISO: norm,
+    birthdateISO: iso,
     birthdateSetAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
 }
 
-
 export function useUserProfile(uid?: string | null) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
+
   useEffect(() => {
-    if (!uid) { setProfile(null); return; }
+    if (!uid) {
+      setProfile(null);
+      return;
+    }
     const ref = userDocRef(uid);
-    let cancelled = false;
-    import("firebase/firestore").then(({ onSnapshot }) => {
-      const unsub = onSnapshot(ref, (snap) => {
-        if (cancelled) return;
-        setProfile(snap.exists() ? (snap.data() as UserProfile) : null);
-      });
-      return () => unsub();
+
+    const unsub = onSnapshot(ref, (snap) => {
+      setProfile(snap.exists() ? (snap.data() as UserProfile) : null);
     });
-    return () => { cancelled = true; };
+
+    return () => unsub();
   }, [uid]);
+
   return profile;
 }

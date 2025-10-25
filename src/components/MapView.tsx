@@ -15,11 +15,16 @@ import type { Marker as LeafletMarker } from "leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import useSupercluster from "use-supercluster";
+
 import type { HelpRequest } from "../lib/types";
-import { markDone } from "../lib/requests";
 import { haversineKm } from "../lib/geo";
+
 import { auth, db } from "../lib/firebase";
 import { doc, onSnapshot } from "firebase/firestore";
+
+/* ------------------------------------------------------------------------- */
+/* Types                                                                      */
+/* ------------------------------------------------------------------------- */
 
 export type MapBounds = {
   west: number;
@@ -28,26 +33,52 @@ export type MapBounds = {
   north: number;
 };
 
-// ---------- User mini-profile ----------
+type Props = {
+  center: { lat: number; lng: number };
+  requests: HelpRequest[];
+  className?: string;
+  userLoc?: { lat: number; lng: number };
+  selectedId?: string;
+  selectedTick?: number;
+  onOpenChat?: (req: HelpRequest) => void;
+  onAccept?: (req: HelpRequest) => void;
+  onLocated?: (loc: { lat: number; lng: number }) => void;
+  onBoundsChange?: (b: MapBounds) => void;
+  radiusKm?: number;
+  onMarkDone?: (req: HelpRequest) => void;
+  onOpenProfile?: (uid: string) => void;
+};
+
+/* ------------------------------------------------------------------------- */
+/* User mini hook                                                             */
+/* ------------------------------------------------------------------------- */
+
 function useUserMini(uid?: string | null) {
-  const [name, setName] = useState<string | null>(null);
-  useEffect(() => {
+  const [name, setName] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
     if (!uid) return;
     const ref = doc(db, "users", uid);
     const unsub = onSnapshot(
       ref,
       (snap) => {
         const d = snap.data() as any | undefined;
-        setName(d?.displayName ?? d?.name ?? d?.profile?.displayName ?? null);
+        setName(
+          d?.displayName ?? d?.name ?? d?.profile?.displayName ?? "Unknown user"
+        );
       },
-      () => setName(null)
+      () => setName("Unknown user")
     );
     return () => unsub();
   }, [uid]);
+
   return name;
 }
 
-// ---------- Address handling ----------
+/* ------------------------------------------------------------------------- */
+/* Address format                                                             */
+/* ------------------------------------------------------------------------- */
+
 type AnyAddress =
   | string
   | {
@@ -61,7 +92,7 @@ type AnyAddress =
 function formatAddress(addr: AnyAddress): string | null {
   if (!addr) return null;
   if (typeof addr === "string") {
-    const s = (addr as string)?.trim?.() ?? "";
+    const s = addr.trim?.() ?? "";
     return s.length ? s : null;
   }
   const city = addr.city ? String(addr.city).trim() : "";
@@ -73,7 +104,10 @@ function formatAddress(addr: AnyAddress): string | null {
   return parts.length ? parts.join(", ") : null;
 }
 
-// ---------- Icons ----------
+/* ------------------------------------------------------------------------- */
+/* Icons                                                                      */
+/* ------------------------------------------------------------------------- */
+
 const userDotIcon = L.divIcon({
   className: "user-dot-wrap",
   html: `<span class="user-dot"></span><span class="user-dot-pulse"></span>`,
@@ -102,9 +136,19 @@ function clusterIcon(count: number) {
   const size = count < 10 ? 30 : count < 50 ? 36 : 44;
   const color = count < 10 ? "#2563eb" : count < 50 ? "#7c3aed" : "#dc2626";
   const html = `
-    <div style="background:${color};color:#fff;width:${size}px;height:${size}px;border-radius:9999px;
-    display:flex;align-items:center;justify-content:center;box-shadow:0 0 0 3px rgba(255,255,255,0.8);
-    font-weight:600;">${count}</div>`;
+    <div style="
+      background:${color};
+      color:#fff;
+      width:${size}px;
+      height:${size}px;
+      border-radius:9999px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      box-shadow:0 0 0 3px rgba(255,255,255,0.8);
+      font-weight:600;">
+      ${count}
+    </div>`;
   return L.divIcon({
     html,
     className: "cluster-icon",
@@ -113,7 +157,10 @@ function clusterIcon(count: number) {
   });
 }
 
-// ---------- Map controls ----------
+/* ------------------------------------------------------------------------- */
+/* Map controls / location button                                            */
+/* ------------------------------------------------------------------------- */
+
 function LocateControl({
   userLoc,
   onLocate,
@@ -124,18 +171,45 @@ function LocateControl({
   position?: L.ControlPosition;
 }) {
   const map = useMap();
+
   useEffect(() => {
     const ctrl = L.control({ position });
+
     ctrl.onAdd = () => {
-      const container = L.DomUtil.create("div", "leaflet-bar locate-btn");
+      // outer wrapper Leaflet expects
+      const container = L.DomUtil.create("div", "leaflet-control-locate");
+
+      // actual clickable button
       const btn = L.DomUtil.create("button", "locate-btn-el", container);
-      btn.title = "My location";
+
+      // use aria-label instead of title so we don't spawn a browser tooltip
+      btn.setAttribute("aria-label", "My location");
+      btn.innerHTML = `
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          width="20"
+          height="20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 2v3"></path>
+          <path d="M12 19v3"></path>
+          <path d="M2 12h3"></path>
+          <path d="M19 12h3"></path>
+          <circle cx="12" cy="12" r="9"></circle>
+        </svg>
+      `;
+
+      // stop map drag when clicking
       L.DomEvent.disableClickPropagation(container);
       L.DomEvent.on(btn, "click", async () => {
         if (userLoc) {
-          map.flyTo([userLoc.lat, userLoc.lng], Math.max(map.getZoom(), 15), {
-            animate: true,
-          });
+          panToWithOffset(map, userLoc.lat, userLoc.lng, 0.25);
           onLocate(userLoc);
           return;
         }
@@ -150,22 +224,30 @@ function LocateControl({
                 })
             );
             const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-            map.flyTo([loc.lat, loc.lng], Math.max(map.getZoom(), 15), {
-              animate: true,
-            });
+            panToWithOffset(map, loc.lat, loc.lng, 0.25);
             onLocate(loc);
-          } catch {}
+          } catch {
+            /* ignore */
+          }
         }
       });
+
       return container;
     };
+
     ctrl.addTo(map);
-    return () => ctrl.remove();
+    return () => {
+      ctrl.remove();
+    };
   }, [map, position, userLoc, onLocate]);
+
   return null;
 }
 
-// ---------- Radius overlay (red circle) ----------
+/* ------------------------------------------------------------------------- */
+/* Radius overlay                                                             */
+/* ------------------------------------------------------------------------- */
+
 function RadiusOverlay({
   userLoc,
   radiusKm,
@@ -176,17 +258,16 @@ function RadiusOverlay({
   const map = useMap();
   const circleRef = useRef<L.Circle | null>(null);
 
-  // Focus on circle whenever radius or user location changes
+  // auto-zoom to fit circle
   useEffect(() => {
     if (!userLoc || !radiusKm || radiusKm <= 0) return;
     const c = circleRef.current;
     if (!c) return;
-    // fit to circle bounds with padding; guard if map not ready
     try {
       const b = c.getBounds();
       map.fitBounds(b, { padding: [36, 36] });
     } catch {
-      // ignore
+      /* ignore */
     }
   }, [radiusKm, userLoc, map]);
 
@@ -204,13 +285,49 @@ function RadiusOverlay({
   );
 }
 
-// ---------- Marker component ----------
+/* ------------------------------------------------------------------------- */
+/* Utility: panToWithOffset                                                   */
+/* ------------------------------------------------------------------------- */
+/*
+  We don't want the marker dead-center because the popup sits above it.
+  We'll pan so the marker sits ~offsetFromTop (0 = top, 1 = bottom).
+  Ex: 0.6 means place marker a bit lower, so popup fits.
+*/
+function panToWithOffset(
+  map: L.Map,
+  lat: number,
+  lng: number,
+  offsetFromTop = 0.6,
+  zoom?: number
+) {
+  const mapSize = map.getSize(); // pixels
+  const targetPoint = map.project([lat, lng], zoom ?? map.getZoom());
+
+  // y shift: move marker down so popup space is above it.
+  const desiredY = mapSize.y * offsetFromTop;
+  const deltaY = desiredY - mapSize.y / 2;
+
+  const shiftedPoint = L.point(targetPoint.x, targetPoint.y + deltaY);
+  const shiftedLatLng = map.unproject(shiftedPoint, zoom ?? map.getZoom());
+
+  if (zoom != null) {
+    map.setView(shiftedLatLng, zoom, { animate: true });
+  } else {
+    map.panTo(shiftedLatLng, { animate: true });
+  }
+}
+
+/* ------------------------------------------------------------------------- */
+/* RequestMarker                                                              */
+/* ------------------------------------------------------------------------- */
+
 function RequestMarker({
   req,
   myId,
   userLoc,
   onAccept,
   onOpenChat,
+  onOpenProfile,
   onMarkDone,
   setRef,
 }: {
@@ -219,9 +336,12 @@ function RequestMarker({
   userLoc?: { lat: number; lng: number };
   onAccept?: (req: HelpRequest) => void;
   onOpenChat?: (req: HelpRequest) => void;
+  onOpenProfile?: (uid: string) => void;
+  onMarkDone?: (req: HelpRequest) => void;
   setRef?: (m: LeafletMarker | null) => void;
 }) {
   const requesterName = useUserMini(req.requesterId);
+
   const locationLabel =
     formatAddress((req as any).address) ?? "Address not provided";
 
@@ -229,6 +349,7 @@ function RequestMarker({
     userLoc && req.location
       ? haversineKm(userLoc, req.location).toFixed(1)
       : null;
+
   const iAmParticipant =
     myId && (req.requesterId === myId || req.helperId === myId);
 
@@ -239,10 +360,18 @@ function RequestMarker({
       icon={statusIcon(req.status)}
     >
       <Tooltip>{req.title}</Tooltip>
-      <Popup autoPan={false} keepInView={false}>
-        <div className="popup-card">
+
+      <Popup keepInView={false}>
+        <div className="popup-card popup-animate">
+          {/* header row */}
           <div className="popup-head">
-            <div className="popup-title">{req.title}</div>
+            <div className="popup-title flex items-start gap-1">
+              <span role="img" aria-hidden className="text-[14px]">
+                📦
+              </span>
+              <span className="leading-snug break-words">{req.title}</span>
+            </div>
+
             <span
               className={`popup-pill ${
                 req.status === "open"
@@ -251,66 +380,64 @@ function RequestMarker({
                   ? "pill-done"
                   : "pill-active"
               }`}
-              title={`Status: ${req.status}`}
             >
               {req.status.replace("_", " ")}
             </span>
           </div>
 
-          <div className="byline">
-            <div className="byline-row" title="Requester">
-              <svg viewBox="0 0 24 24" className="chip-ico">
-                <path d="M12 12c2.76 0 5-2.24 5-5S14.76 2 12 2 7 4.24 7 7s2.24 5 5 5zm0 2c-4 0-7 2-7 4v2h14v-2c0-2-3-4-7-4z" />
-              </svg>
-              <span className="byline-text">
+          {/* mini requester card */}
+          <button
+            className="requester-chip text-left"
+            onClick={() => onOpenProfile?.(req.requesterId)}
+          >
+            <div className="avatar-circle">👤</div>
+            <div className="flex min-w-0 flex-col">
+              <div className="truncate text-[13px] font-medium text-gray-900">
                 {requesterName ?? "Unknown user"}
-              </span>
+              </div>
+              <div className="truncate text-[11px] text-gray-500">
+                Requester
+              </div>
             </div>
-            <div className="byline-row" title="Address">
-              <svg viewBox="0 0 24 24" className="chip-ico">
-                <path d="M12 2a7 7 0 017 7c0 5-7 13-7 13S5 14 5 9a7 7 0 017-7z" />
-                <circle cx="12" cy="9" r="2.5" fill="currentColor" />
-              </svg>
+          </button>
+
+          {/* location + distance */}
+          <div className="byline">
+            <div className="byline-row">
+              <span className="chip-emoji">📍</span>
               <span className="byline-text">{locationLabel}</span>
             </div>
-          </div>
-
-          {req.description && (
-            <div className="popup-desc">{req.description}</div>
-          )}
-
-          <div className="popup-meta">
-            <span className="meta-chip" title="Category">
-              <svg viewBox="0 0 24 24" className="chip-ico">
-                <path d="M12 3l9 6-9 6-9-6 9-6zm0 12l9 6-9 6-9-6 9-6z" />
-              </svg>
-              {req.category}
-            </span>
-
-            {typeof req.reward === "number" && (
-              <span className="meta-chip" title="Reward">
-                <svg viewBox="0 0 24 24" className="chip-ico">
-                  <path
-                    d="M12 1v22M5 6h9a4 4 0 110 8H6m0 0h8"
-                    strokeWidth="2"
-                    fill="none"
-                  />
-                </svg>
-                {req.reward}
-              </span>
-            )}
 
             {distance && (
-              <span className="meta-chip" title="Approx. distance">
-                <svg viewBox="0 0 24 24" className="chip-ico">
-                  <path d="M12 2a7 7 0 017 7c0 5-7 13-7 13S5 14 5 9a7 7 0 017-7z" />
-                  <circle cx="12" cy="9" r="2.5" fill="currentColor" />
-                </svg>
-                ~{distance} km
+              <div className="byline-row">
+                <span className="chip-emoji">📏</span>
+                <span className="byline-text">~{distance} km away</span>
+              </div>
+            )}
+          </div>
+
+          {/* description */}
+          {req.description && (
+            <div className="popup-desc break-words">{req.description}</div>
+          )}
+
+          {/* category / reward */}
+          <div className="popup-meta">
+            <span className="meta-chip" title="Category">
+              <span className="chip-emoji">🏷️</span>
+              <span className="truncate">{req.category}</span>
+            </span>
+
+            {((typeof req.reward === "number" && !Number.isNaN(req.reward)) ||
+              (typeof req.reward === "string" && req.reward.trim() !== "")) && (
+              <span className="meta-chip" title="Reward / thanks">
+                <span className="chip-emoji">💰</span>
+                <span className="truncate">{req.reward}</span>
               </span>
             )}
           </div>
 
+          {/* actions */}
           <div className="popup-actions">
             {req.status === "open" && myId && myId !== req.requesterId && (
               <button
@@ -327,7 +454,7 @@ function RequestMarker({
                   onClick={() => onOpenChat?.(req)}
                   className="btn btn-ghost"
                 >
-                  Open chat
+                  💬 Chat
                 </button>
               )}
 
@@ -337,7 +464,7 @@ function RequestMarker({
                   onClick={() => onMarkDone?.(req)}
                   className="btn btn-outline"
                 >
-                  Mark done
+                  ✅ Mark done
                 </button>
               )}
           </div>
@@ -347,8 +474,11 @@ function RequestMarker({
   );
 }
 
-// ---------- Fly & open popup ONLY on selection ----------
-function FocusOnSelected({
+/* ------------------------------------------------------------------------- */
+/* FocusManager: strong zoom + reliable popup open                            */
+/* ------------------------------------------------------------------------- */
+
+function FocusManager({
   selectedId,
   selectedTick,
   coordsByIdRef,
@@ -362,42 +492,79 @@ function FocusOnSelected({
   markerRefs: React.MutableRefObject<Record<string, LeafletMarker | null>>;
 }) {
   const map = useMap();
+
   useEffect(() => {
     if (!selectedId) return;
+
     const loc = coordsByIdRef.current[selectedId];
     if (!loc) return;
 
-    map.flyTo([loc.lat, loc.lng], 16, { animate: true });
+    const targetZoom = Math.max(map.getZoom(), 18); // ensure strong zoom-in
 
-    const openAfter = () => {
-      const m = markerRefs.current[selectedId];
-      if (m) m.openPopup();
-    };
-    map.once("moveend", openAfter);
-    return () => {
-      map.off("moveend", openAfter);
-    };
+    // compute offset at targetZoom and set view there
+    const mapSize = map.getSize();
+    const currentPoint = map.project([loc.lat, loc.lng], targetZoom);
+    const offsetFromTop = 0.6;
+    const desiredY = mapSize.y * offsetFromTop;
+    const deltaY = desiredY - mapSize.y / 2;
+    const shiftedPoint = L.point(currentPoint.x, currentPoint.y + deltaY);
+    const shiftedLatLng = map.unproject(shiftedPoint, targetZoom);
+
+    map.setView(shiftedLatLng, targetZoom, { animate: true });
+
+    // open the popup after the animation settles
+    const t = window.setTimeout(() => {
+      const marker = markerRefs.current[selectedId];
+      if (marker) marker.openPopup();
+    }, 300);
+
+    return () => window.clearTimeout(t);
   }, [selectedId, selectedTick, map, coordsByIdRef, markerRefs]);
 
   return null;
 }
 
-// ---------- Main MapView ----------
-type Props = {
-  center: { lat: number; lng: number };
-  requests: HelpRequest[];
-  className?: string;
-  userLoc?: { lat: number; lng: number };
-  selectedId?: string;
-  selectedTick?: number;
-  onOpenChat?: (req: HelpRequest) => void;
-  onAccept?: (req: HelpRequest) => void;
-  onLocated?: (loc: { lat: number; lng: number }) => void;
+/* ------------------------------------------------------------------------- */
+/* BoundsTracker: tell parent when bounds change                             */
+/* ------------------------------------------------------------------------- */
+
+function BoundsTracker({
+  onBoundsChange,
+  setBoundsState,
+  setZoomState,
+}: {
   onBoundsChange?: (b: MapBounds) => void;
-  /** 👇 Pass this from Home so we can show & focus the red circle */
-  radiusKm?: number;
-  onMarkDone?: (req: HelpRequest) => void;
-};
+  setBoundsState: React.Dispatch<
+    React.SetStateAction<[number, number, number, number] | undefined>
+  >;
+  setZoomState: React.Dispatch<React.SetStateAction<number>>;
+}) {
+  const map = useMap();
+  const rafRef = useRef<number | null>(null);
+
+  useMapEvents({
+    moveend: () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+      rafRef.current = requestAnimationFrame(() => {
+        const b = map.getBounds();
+        setBoundsState([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+        setZoomState(map.getZoom());
+        onBoundsChange?.({
+          west: b.getWest(),
+          south: b.getSouth(),
+          east: b.getEast(),
+          north: b.getNorth(),
+        });
+      });
+    },
+  });
+
+  return null;
+}
+
+/* ------------------------------------------------------------------------- */
+/* Main MapView                                                               */
+/* ------------------------------------------------------------------------- */
 
 export default function MapView({
   center,
@@ -412,29 +579,48 @@ export default function MapView({
   onBoundsChange,
   radiusKm = 0,
   onMarkDone,
+  onOpenProfile,
 }: Props) {
   const myId = auth.currentUser?.uid ?? null;
 
-  // fast lookup of coords by id (used by focus effect)
+  // Safety visibility filter (matches Home logic)
+  const visibleRequests = useMemo(() => {
+    return requests.filter((r) => {
+      if (r.status === "open") return true;
+      if (r.status === "done") return false;
+      if (r.status === "in_progress" || r.status === "accepted") {
+        if (!myId) return false;
+        return r.requesterId === myId || r.helperId === myId;
+      }
+      return false;
+    });
+  }, [requests, myId]);
+
+  // refs for programmatic focus/open
   const coordsByIdRef = useRef<Record<string, { lat: number; lng: number }>>(
     {}
   );
   useEffect(() => {
-    const next: Record<string, { lat: number; lng: number }> = {};
-    for (const r of requests) if (r.location) next[r.id] = r.location;
-    coordsByIdRef.current = next;
-  }, [requests]);
+    const map: Record<string, { lat: number; lng: number }> = {};
+    for (const r of visibleRequests) {
+      if (r.location) map[r.id] = r.location;
+    }
+    coordsByIdRef.current = map;
+  }, [visibleRequests]);
 
-  // marker instances to programmatically open popups
   const markerRefs = useRef<Record<string, LeafletMarker | null>>({});
   const makeMarkerRef = (id: string) => (m: LeafletMarker | null) => {
     markerRefs.current[id] = m;
   };
 
+  // clustering input
+  const [bounds, setBounds] = useState<[number, number, number, number]>();
+  const [zoom, setZoom] = useState(13);
+
   const points = useMemo(
     () =>
-      requests
-        .filter((r) => !!r.location)
+      visibleRequests
+        .filter((r) => r.location)
         .map((r) => ({
           type: "Feature" as const,
           properties: { cluster: false, requestId: r.id },
@@ -443,39 +629,15 @@ export default function MapView({
             coordinates: [r.location!.lng, r.location!.lat],
           },
         })),
-    [requests]
+    [visibleRequests]
   );
 
-  const [bounds, setBounds] = useState<[number, number, number, number]>();
-  const [zoom, setZoom] = useState(13);
   const { clusters } = useSupercluster({
     points,
     bounds,
     zoom,
     options: { radius: 55, maxZoom: 19 },
   });
-
-  function BoundsTracker() {
-    const map = useMap();
-    const t = useRef<number | null>(null);
-    useMapEvents({
-      moveend: () => {
-        if (t.current) cancelAnimationFrame(t.current);
-        t.current = requestAnimationFrame(() => {
-          const b = map.getBounds();
-          setBounds([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
-          setZoom(map.getZoom());
-          onBoundsChange?.({
-            west: b.getWest(),
-            south: b.getSouth(),
-            east: b.getEast(),
-            north: b.getNorth(),
-          });
-        });
-      },
-    });
-    return null;
-  }
 
   return (
     <div className={className}>
@@ -485,28 +647,35 @@ export default function MapView({
         style={{ height: 380, borderRadius: 12 }}
       >
         <TileLayer
-          attribution="&copy; OpenStreetMap"
+          attribution="© OpenStreetMap"
           url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        <BoundsTracker />
 
-        {/* radius overlay & auto-focus on radius changes */}
+        {/* react to bounds changes, sync for clustering, send up to parent */}
+        <BoundsTracker
+          onBoundsChange={onBoundsChange}
+          setBoundsState={setBounds}
+          setZoomState={setZoom}
+        />
+
+        {/* user radius overlay */}
         <RadiusOverlay userLoc={userLoc} radiusKm={radiusKm} />
 
-        {/* focus only on explicit selection and open popup afterwards */}
-        <FocusOnSelected
+        {/* manage focus from list click: pan & open popup */}
+        <FocusManager
           selectedId={selectedId}
           selectedTick={selectedTick}
           coordsByIdRef={coordsByIdRef}
           markerRefs={markerRefs}
         />
 
+        {/* locate control & user dot */}
         <LocateControl userLoc={userLoc} onLocate={(loc) => onLocated?.(loc)} />
-
         {userLoc && (
           <Marker position={[userLoc.lat, userLoc.lng]} icon={userDotIcon} />
         )}
 
+        {/* render clusters & markers */}
         {clusters.map((c: any) => {
           const [lng, lat] = c.geometry.coordinates;
 
@@ -520,7 +689,9 @@ export default function MapView({
             );
           }
 
-          const req = requests.find((r) => r.id === c.properties.requestId);
+          const req = visibleRequests.find(
+            (r) => r.id === c.properties.requestId
+          );
           if (!req?.location) return null;
 
           return (
@@ -531,7 +702,8 @@ export default function MapView({
               userLoc={userLoc}
               onAccept={onAccept}
               onOpenChat={onOpenChat}
-              onMarkDone={onMarkDone} // ✅ new
+              onOpenProfile={onOpenProfile}
+              onMarkDone={onMarkDone}
               setRef={makeMarkerRef(req.id)}
             />
           );
@@ -539,55 +711,125 @@ export default function MapView({
       </MapContainer>
 
       <style>{`
-        /* Locate button – no gap */
-        .locate-btn { border-radius: 8px; overflow: hidden; }
-        .locate-btn-el {
-          display:flex; align-items:center; justify-content:center;
-          background:#fff; border:1px solid #d1d5db; width:36px; height:36px;
-          padding:0; margin:0; line-height:1; cursor:pointer; border-radius:8px;
-        }
-        .locate-btn-el:hover { background:#f3f4f6; }
-        .leaflet-top .leaflet-control.locate-btn { margin-top: 80px; }
+  /* custom locate control */
+  .leaflet-control-locate {
+    /* match Leaflet's control positioning spacing */
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    border-radius: 9999px;
+    background: transparent;
+    margin-top: 80px; /* puts it under the + / - zoom buttons */
+    margin-left: 10px;
+  }
 
-        /* User dot */
-        .user-dot-wrap { position: relative; }
-        .user-dot { width: 10px; height: 10px; border-radius: 50%; background:#2563eb; display:inline-block; }
-        .user-dot-pulse { position:absolute; left:50%; top:50%; width:14px; height:14px; transform:translate(-50%,-50%);
-          border:2px solid #3b82f6; border-radius:50%; animation:pulse 1.5s infinite; }
-        @keyframes pulse { 0%{opacity:.7;transform:translate(-50%,-50%)scale(1);} 70%{opacity:0;transform:translate(-50%,-50%)scale(2);} 100%{opacity:0;} }
+  .locate-btn-el {
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    width:36px;
+    height:36px;
+    border-radius:9999px;
+    background:#ffffff;
+    border:1px solid #d1d5db;
+    cursor:pointer;
+    line-height:1;
+    padding:0;
 
-        /* Popup styles */
-        .popup-card { min-width: 240px; max-width: 300px; font-family: system-ui, ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
-        .popup-head { display:flex; align-items:center; justify-content:space-between; gap:.5rem; }
-        .popup-title { font-weight: 700; font-size: 14px; line-height: 1.2; }
-        .popup-pill { font-size: 11px; padding: 2px 8px; border-radius: 9999px; border: 1px solid transparent; }
-        .pill-open { background:#ecfdf5; color:#065f46; border-color:#a7f3d0; }
-        .pill-active { background:#fffbeb; color:#92400e; border-color:#fed7aa; }
-        .pill-done { background:#f3f4f6; color:#374151; border-color:#e5e7eb; }
+    color:#1f2937; /* icon color */
+    box-shadow:0 2px 4px rgba(0,0,0,0.08);
+    transition:background .12s, box-shadow .12s, border-color .12s;
+  }
 
-        .popup-desc { margin-top:.5rem; font-size: 13px; color:#374151; }
+  .locate-btn-el:hover {
+    background:#f9fafb;
+    border-color:#9ca3af;
+    box-shadow:0 3px 6px rgba(0,0,0,0.12);
+  }
 
-        .byline { margin-top:.5rem; display:grid; gap:.25rem; }
-        .byline-row { display:flex; align-items:center; gap:.4rem; font-size:12px; color:#4b5563; }
-        .byline-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  /* user location pulse marker */
+  .user-dot-wrap { position: relative; }
+  .user-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background:#2563eb;
+    display:inline-block;
+    box-shadow:0 0 0 2px #fff;
+  }
+  .user-dot-pulse {
+    position:absolute;
+    left:50%; top:50%;
+    width:14px; height:14px;
+    transform:translate(-50%,-50%);
+    border:2px solid #3b82f6;
+    border-radius:50%;
+    animation:pulse 1.5s infinite;
+  }
+  @keyframes pulse {
+    0%   {opacity:.7; transform:translate(-50%,-50%) scale(1);}
+    70%  {opacity:0;  transform:translate(-50%,-50%) scale(2);}
+    100% {opacity:0;}
+  }
 
-        .chip-ico { width:14px; height:14px; color:#6b7280; flex:0 0 auto; }
+  /* popup animation */
+  @keyframes popupFadeUp {
+    0% { opacity:0; transform:translateY(4px) scale(0.98); }
+    100% { opacity:1; transform:translateY(0) scale(1); }
+  }
 
-        .popup-meta { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.6rem; }
-        .meta-chip {
-          display:inline-flex; align-items:center; gap:.35rem;
-          font-size: 11px; padding: 3px 8px; border-radius:9999px;
-          background:#f3f4f6; color:#374151; border:1px solid #e5e7eb;
-        }
+  .popup-card {
+    min-width: 260px;
+    max-width: 320px;
+    font-family: system-ui, ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    background:white;
+  }
+  .popup-animate { animation: popupFadeUp .18s ease-out both; }
 
-        .popup-actions { margin-top:.75rem; display:flex; flex-wrap:wrap; gap:.5rem; }
-        .btn { border-radius:8px; font-size:12px; padding:6px 10px; border:1px solid #e5e7eb; }
-        .btn:hover { background:#f9fafb; }
-        .btn-primary { background:#111827; color:white; border-color:#111827; }
-        .btn-primary:hover { opacity:.9; }
-        .btn-outline { background:white; }
-        .btn-ghost { background:white; }
-      `}</style>
+  .popup-head { display:flex; align-items:flex-start; justify-content:space-between; gap:.5rem; }
+  .popup-title { font-weight:700; font-size:14px; line-height:1.2; color:#111827; word-break:break-word; }
+  .popup-pill { font-size:11px; padding:2px 8px; border-radius:9999px; border:1px solid transparent; line-height:1.2; font-weight:500; }
+  .pill-open { background:#ecfdf5; color:#065f46; border-color:#a7f3d0; }
+  .pill-active { background:#fffbeb; color:#92400e; border-color:#fed7aa; }
+  .pill-done { background:#f3f4f6; color:#374151; border-color:#e5e7eb; }
+
+  .requester-chip {
+    margin-top:.75rem;
+    display:flex; align-items:center; gap:.5rem;
+    border:1px solid #e5e7eb;
+    background:linear-gradient(to right,#f9fafb,#fff);
+    border-radius:12px; padding:.5rem .75rem; cursor:pointer;
+    box-shadow:0 1px 2px rgba(0,0,0,.04); transition: background .12s; width:100%;
+  }
+  .requester-chip:hover { background:linear-gradient(to right,#eef2ff,#fff); }
+  .avatar-circle {
+    flex-shrink:0; width:32px; height:32px; border-radius:9999px;
+    background:#e0e7ff; display:flex; align-items:center; justify-content:center; font-size:14px; line-height:1;
+  }
+
+  .byline { margin-top:.75rem; display:grid; gap:.4rem; }
+  .byline-row { display:flex; align-items:center; gap:.4rem; font-size:12px; color:#4b5563; }
+  .chip-emoji { font-size:13px; line-height:1; flex:0 0 auto; }
+  .byline-text { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+  .popup-desc { margin-top:.75rem; font-size:13px; color:#374151; line-height:1.4; word-break: break-word; }
+
+  .popup-meta { display:flex; flex-wrap:wrap; gap:.4rem; margin-top:.75rem; }
+  .meta-chip {
+    display:inline-flex; min-width:0; max-width:100%; align-items:center; gap:.35rem;
+    font-size:11px; padding:4px 8px; border-radius:9999px;
+    background:#f3f4f6; color:#374151; border:1px solid #e5e7eb; line-height:1.2;
+  }
+
+  .popup-actions { margin-top:1rem; display:flex; flex-wrap:wrap; gap:.5rem; }
+  .btn {
+    border-radius:8px; font-size:12px; padding:6px 10px; border:1px solid #e5e7eb; background:white;
+    display:inline-flex; align-items:center; gap:.4rem; line-height:1.2; font-weight:500; color:#1f2937;
+  }
+  .btn:hover { background:#f9fafb; }
+  .btn-primary { background:#111827; color:white; border-color:#111827; }
+  .btn-primary:hover { opacity:.9; }
+  .btn-outline { background:white; }
+  .btn-ghost { background:white; }
+`}</style>
     </div>
   );
 }

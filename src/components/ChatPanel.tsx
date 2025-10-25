@@ -20,7 +20,12 @@ export default function ChatPanel(props: ChatPanelProps) {
   return createPortal(<ChatSurface {...props} />, document.body);
 }
 
-function ChatSurface({ chatId, onClose, requestTitle, otherUser }: ChatPanelProps) {
+function ChatSurface({
+  chatId,
+  onClose,
+  requestTitle,
+  otherUser,
+}: ChatPanelProps) {
   const [msgs, setMsgs] = useState<ChatMessage[]>([]);
   const [text, setText] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
@@ -36,7 +41,10 @@ function ChatSurface({ chatId, onClose, requestTitle, otherUser }: ChatPanelProp
   }, [chatId]);
 
   useEffect(() => {
-    listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" });
+    listRef.current?.scrollTo({
+      top: listRef.current.scrollHeight,
+      behavior: "smooth",
+    });
   }, [msgs.length]);
 
   useEffect(() => {
@@ -74,13 +82,22 @@ function ChatSurface({ chatId, onClose, requestTitle, otherUser }: ChatPanelProp
     });
   }
 
-  const otherName = otherUser?.name ?? "Unknown user";
+  const otherName =
+    otherUser?.name && otherUser.name.trim() !== ""
+      ? otherUser.name
+      : otherUser?.uid
+      ? `User ${otherUser.uid.slice(0, 6)}`
+      : "Community member";
   const phone = otherUser?.phone ?? undefined;
 
   return (
     <>
       {/* Backdrop */}
-      <div className="fixed inset-0 z-[1000] bg-black/30" onClick={onClose} aria-hidden="true" />
+      <div
+        className="fixed inset-0 z-[1000] bg-black/30"
+        onClick={onClose}
+        aria-hidden="true"
+      />
 
       {/* Panel */}
       <div
@@ -100,7 +117,11 @@ function ChatSurface({ chatId, onClose, requestTitle, otherUser }: ChatPanelProp
               <div className="truncate text-sm font-semibold">{otherName}</div>
               <div className="truncate text-xs text-gray-500">
                 {requestTitle ? <>Request: {requestTitle}</> : null}
-                {phone ? <>{requestTitle ? " • " : ""}Phone: {phone}</> : null}
+                {phone ? (
+                  <>
+                    {requestTitle ? " • " : ""}Phone: {phone}
+                  </>
+                ) : null}
               </div>
             </div>
             <button
@@ -113,17 +134,31 @@ function ChatSurface({ chatId, onClose, requestTitle, otherUser }: ChatPanelProp
           </div>
 
           {/* Messages */}
-          <div ref={listRef} className="max-h-[55vh] overflow-y-auto px-4 py-3 sm:max-h-[50vh]">
+          <div
+            ref={listRef}
+            className="max-h-[55vh] overflow-y-auto px-4 py-3 sm:max-h-[50vh]"
+          >
             {/* Optional intro chip */}
             <div className="mb-3 text-center text-[11px] text-gray-500">
-              You’re chatting with <span className="font-medium text-gray-700">{otherName}</span>
-              {phone ? <> — reach them at <span className="font-medium">{phone}</span></> : null}
+              You’re chatting with{" "}
+              <span className="font-medium text-gray-700">{otherName}</span>
+              {phone ? (
+                <>
+                  {" "}
+                  — reach them at <span className="font-medium">{phone}</span>
+                </>
+              ) : null}
             </div>
 
             {msgs.map((m) => {
               const mine = m.senderId === auth.currentUser?.uid;
               return (
-                <div key={m.id} className={`mb-2 flex ${mine ? "justify-end" : "justify-start"}`}>
+                <div
+                  key={m.id}
+                  className={`mb-2 flex ${
+                    mine ? "justify-end" : "justify-start"
+                  }`}
+                >
                   <div
                     className={`whitespace-pre-wrap rounded-2xl px-3 py-2 text-sm ${
                       mine ? "bg-black text-white" : "bg-gray-100"
@@ -135,7 +170,9 @@ function ChatSurface({ chatId, onClose, requestTitle, otherUser }: ChatPanelProp
               );
             })}
             {msgs.length === 0 && (
-              <div className="py-8 text-center text-sm text-gray-500">No messages yet.</div>
+              <div className="py-8 text-center text-sm text-gray-500">
+                No messages yet.
+              </div>
             )}
           </div>
 
@@ -177,7 +214,13 @@ function ChatSurface({ chatId, onClose, requestTitle, otherUser }: ChatPanelProp
                   w-[350px] rounded-xl border bg-white shadow-2xl
                 "
               >
-                <Suspense fallback={<div className="p-4 text-sm text-gray-500">Loading emojis…</div>}>
+                <Suspense
+                  fallback={
+                    <div className="p-4 text-sm text-gray-500">
+                      Loading emojis…
+                    </div>
+                  }
+                >
                   <EmojiPicker
                     onEmojiClick={(e: any) => insertEmoji(e.emoji)}
                     lazyLoadEmojis

@@ -152,6 +152,11 @@ const pickIcon = new L.Icon({
   popupAnchor: [0, -30],
 });
 
+/**
+ * LocateControl
+ * Custom round "target" button that does not hide on hover.
+ * Same visual language as MapView version.
+ */
 function LocateControl({
   userLoc,
   onLocate,
@@ -162,21 +167,48 @@ function LocateControl({
   position?: L.ControlPosition;
 }) {
   const map = useMap();
+
   useEffect(() => {
     const ctrl = L.control({ position });
+
     ctrl.onAdd = () => {
-      const container = L.DomUtil.create("div", "leaflet-bar locate-btn");
+      const container = L.DomUtil.create("div", "leaflet-control-locate");
       const btn = L.DomUtil.create("button", "locate-btn-el", container);
-      btn.title = "My location";
+
+      btn.setAttribute("aria-label", "My location");
+      btn.innerHTML = `
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          width="20"
+          height="20"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="3"></circle>
+          <path d="M12 2v3"></path>
+          <path d="M12 19v3"></path>
+          <path d="M2 12h3"></path>
+          <path d="M19 12h3"></path>
+          <circle cx="12" cy="12" r="9"></circle>
+        </svg>
+      `;
+
       L.DomEvent.disableClickPropagation(container);
       L.DomEvent.on(btn, "click", async () => {
         if (userLoc) {
-          map.flyTo([userLoc.lat, userLoc.lng], Math.max(map.getZoom(), 15), {
-            animate: true,
-          });
+          map.flyTo(
+            [userLoc.lat, userLoc.lng],
+            Math.max(map.getZoom(), 15),
+            { animate: true }
+          );
           onLocate(userLoc);
           return;
         }
+
         if ("geolocation" in navigator) {
           try {
             const pos = await new Promise<GeolocationPosition>(
@@ -187,21 +219,31 @@ function LocateControl({
                   maximumAge: 0,
                 })
             );
-            const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-            map.flyTo([loc.lat, loc.lng], Math.max(map.getZoom(), 15), {
-              animate: true,
-            });
+            const loc = {
+              lat: pos.coords.latitude,
+              lng: pos.coords.longitude,
+            };
+            map.flyTo(
+              [loc.lat, loc.lng],
+              Math.max(map.getZoom(), 15),
+              { animate: true }
+            );
             onLocate(loc);
           } catch {
-            /* ignore */
+            /* swallow geolocation errors */
           }
         }
       });
+
       return container;
     };
+
     ctrl.addTo(map);
-    return () => ctrl.remove();
+    return () => {
+      ctrl.remove();
+    };
   }, [map, position, userLoc, onLocate]);
+
   return null;
 }
 
@@ -240,7 +282,7 @@ export default function NewRequestModal({
   const [category, setCategory] = useState<Category>("other");
   const [reward, setReward] = useState("");
 
-  // Location, user & picked
+  // Location state
   const [picked, setPicked] = useState<LatLng | null>(null);
   const [myLoc, setMyLoc] = useState<LatLng | undefined>(userLocation);
   useEffect(
@@ -261,10 +303,10 @@ export default function NewRequestModal({
   const [showCitySugs, setShowCitySugs] = useState(false);
   const [showStreetSugs, setShowStreetSugs] = useState(false);
 
-  // City bbox for scoping
+  // Selected city bbox
   const cityBBoxRef = useRef<[number, number, number, number] | null>(null);
 
-  // Validation control
+  // Validation
   const [addrValidity, setAddrValidity] = useState<Validity>("idle");
   const [addrMsg, setAddrMsg] = useState("");
   const dirtyRef = useRef(false);
@@ -277,6 +319,7 @@ export default function NewRequestModal({
   } | null>(null);
   const updatingFromMapRef = useRef(false);
 
+  // AbortControllers for fetches
   const abortFwdRef = useRef<AbortController | null>(null);
   const abortRevRef = useRef<AbortController | null>(null);
 
@@ -460,7 +503,7 @@ export default function NewRequestModal({
           let bbox: [number, number, number, number] | undefined;
           if (Array.isArray(x.boundingbox) && x.boundingbox.length === 4) {
             const [south, north, west, east] = x.boundingbox.map(Number);
-            bbox = [west, south, east, north]; // our format
+            bbox = [west, south, east, north]; // [west, south, east, north]
           }
           return {
             label:
@@ -485,37 +528,40 @@ export default function NewRequestModal({
     }
   }, 300);
 
-  const debouncedFetchStreet = useDebounced(async (q: string, city: string) => {
-    if (q.length < 2 || city.trim().length < 2) return setStreetSugs([]);
-    try {
-      const url = new URL("https://nominatim.openstreetmap.org/search");
-      url.searchParams.set("q", `${q} ${city}`);
-      url.searchParams.set("addressdetails", "1");
-      url.searchParams.set("limit", "5");
-      url.searchParams.set("countrycodes", COUNTRY);
+  const debouncedFetchStreet = useDebounced(
+    async (q: string, city: string) => {
+      if (q.length < 2 || city.trim().length < 2) return setStreetSugs([]);
+      try {
+        const url = new URL("https://nominatim.openstreetmap.org/search");
+        url.searchParams.set("q", `${q} ${city}`);
+        url.searchParams.set("addressdetails", "1");
+        url.searchParams.set("limit", "5");
+        url.searchParams.set("countrycodes", COUNTRY);
 
-      const bbox = cityBBoxRef.current;
-      if (bbox) {
-        const [west, south, east, north] = bbox;
-        url.searchParams.set("viewbox", `${west},${north},${east},${south}`);
-        url.searchParams.set("bounded", "1");
+        const bbox = cityBBoxRef.current;
+        if (bbox) {
+          const [west, south, east, north] = bbox;
+          url.searchParams.set("viewbox", `${west},${north},${east},${south}`);
+          url.searchParams.set("bounded", "1");
+        }
+
+        const arr = (await fetchJson(url)) as any[];
+        const sugs: Suggestion[] = (arr || [])
+          .map((x) => ({
+            label: x.address?.road || shortName(x),
+            lat: x.lat ? Number(x.lat) : undefined,
+            lon: x.lon ? Number(x.lon) : undefined,
+          }))
+          .filter((s) => s.label)
+          .slice(0, 3);
+
+        setStreetSugs(sugs);
+      } catch {
+        setStreetSugs([]);
       }
-
-      const arr = (await fetchJson(url)) as any[];
-      const sugs: Suggestion[] = (arr || [])
-        .map((x) => ({
-          label: x.address?.road || shortName(x),
-          lat: x.lat ? Number(x.lat) : undefined,
-          lon: x.lon ? Number(x.lon) : undefined,
-        }))
-        .filter((s) => s.label)
-        .slice(0, 3);
-
-      setStreetSugs(sugs);
-    } catch {
-      setStreetSugs([]);
-    }
-  }, 300);
+    },
+    300
+  );
 
   /* user edits → mark dirty (map-driven edits do not) */
   function userEdit<K extends keyof Address>(key: K, value: Address[K]) {
@@ -528,22 +574,33 @@ export default function NewRequestModal({
   function onCityChange(v: string) {
     userEdit("city", v);
     setShowCitySugs(true);
-    debouncedFetchCity(v);
+    if (v.length >= 2) {
+      debouncedFetchCity(v);
+    } else {
+      setCitySugs([]);
+    }
   }
   function onStreetChange(v: string) {
     userEdit("street", v);
     setShowStreetSugs(true);
-    debouncedFetchStreet(v, address.city);
+    if (v.length >= 2 && address.city.trim().length >= 2) {
+      debouncedFetchStreet(v, address.city);
+    } else {
+      setStreetSugs([]);
+    }
   }
   function onHouseChange(v: string) {
-    // keep only digits, cap at 3 characters
+    // digits only, max 3 chars
     const sanitized = v.replace(/\D/g, "").slice(0, 3);
     userEdit("houseNumber", sanitized);
   }
   function applyCitySuggestion(s: Suggestion) {
     userEdit("city", s.label);
     setShowCitySugs(false);
-    if (s.bbox) cityBBoxRef.current = s.bbox;
+
+    if (s.bbox) {
+      cityBBoxRef.current = s.bbox;
+    }
     if (s.lat && s.lon) {
       const loc = { lat: s.lat, lng: s.lon };
       setPicked((prev) => (prev && metersBetween(prev, loc) < 10 ? prev : loc));
@@ -687,12 +744,15 @@ export default function NewRequestModal({
                 attribution="&copy; OpenStreetMap contributors"
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
+
               <LocateControl
                 userLoc={myLoc}
                 onLocate={(loc) => setMyLoc(loc)}
               />
+
               <FlyTo center={picked ?? myLoc} />
               <ClickPicker onPick={onPickFromMap} />
+
               {myLoc && (
                 <Marker position={[myLoc.lat, myLoc.lng]} icon={userDotIcon} />
               )}
@@ -703,7 +763,9 @@ export default function NewRequestModal({
 
             <div className="mt-2 text-xs text-gray-600">
               {picked
-                ? `Selected: ${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}`
+                ? `Selected: ${picked.lat.toFixed(5)}, ${picked.lng.toFixed(
+                    5
+                  )}`
                 : `Click the map to place a marker.`}
             </div>
           </div>
@@ -840,54 +902,70 @@ export default function NewRequestModal({
             </button>
           </div>
         </div>
+
+        {/* styles for mini-map locate button & pulse marker */}
+        <style>{`
+          /* custom locate control button (aligned with main map styling) */
+          .leaflet-control-locate {
+            box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+            border-radius: 9999px;
+            background: transparent;
+            margin-top: 40px;   /* sit under zoom +/- in small map */
+            margin-left: 10px;
+          }
+
+          .locate-btn-el {
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            width:32px;
+            height:32px;
+            border-radius:9999px;
+            background:#ffffff;
+            border:1px solid #d1d5db;
+            cursor:pointer;
+            line-height:1;
+            padding:0;
+
+            color:#1f2937;
+            box-shadow:0 2px 4px rgba(0,0,0,0.08);
+            transition:background .12s, box-shadow .12s, border-color .12s;
+          }
+
+          .locate-btn-el:hover {
+            background:#f9fafb;
+            border-color:#9ca3af;
+            box-shadow:0 3px 6px rgba(0,0,0,0.12);
+          }
+
+          /* "you are here" animated blue dot */
+          .user-dot-wrap { position: relative; }
+          .user-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background:#2563eb;
+            display:inline-block;
+            box-shadow:0 0 0 2px #fff;
+          }
+          .user-dot-pulse {
+            position:absolute;
+            left:50%;
+            top:50%;
+            width:14px;
+            height:14px;
+            transform:translate(-50%,-50%);
+            border:2px solid #3b82f6;
+            border-radius:50%;
+            animation:pulse 1.5s infinite;
+          }
+          @keyframes pulse {
+            0%   {opacity:.7; transform:translate(-50%,-50%) scale(1);}
+            70%  {opacity:0;  transform:translate(-50%,-50%) scale(2);}
+            100% {opacity:0;}
+          }
+        `}</style>
       </div>
     </div>
   );
-
-  /* ───── local helpers (need closure state) ───── */
-
-  function userEdit<K extends keyof Address>(key: K, value: Address[K]) {
-    if (!updatingFromMapRef.current) {
-      dirtyRef.current = true;
-      abortFwdRef.current?.abort();
-    }
-    setAddress((a) => ({ ...a, [key]: value }));
-  }
-
-  function onCityChange(v: string) {
-    userEdit("city", v);
-    setShowCitySgs(true);
-    setShowCitySgs(true);
-    setShowCitySugs(true);
-    // Debounced fetch
-    debouncedFetchCity(v);
-  }
-
-  function onStreetChange(v: string) {
-    userEdit("street", v);
-    setShowStreetSugs(true);
-    debouncedFetchStreet(v, address.city);
-  }
-
-  function onHouseChange(v: string) {
-    // keep only digits, cap at 3 characters
-    const sanitized = v.replace(/\D/g, "").slice(0, 3);
-    userEdit("houseNumber", sanitized);
-  }
-
-  function applyCitySuggestion(s: Suggestion) {
-    userEdit("city", s.label);
-    setShowCitySugs(false);
-    if (s.bbox) cityBBoxRef.current = s.bbox;
-    if (s.lat && s.lon) {
-      const loc = { lat: s.lat, lng: s.lon };
-      setPicked((prev) => (prev && metersBetween(prev, loc) < 10 ? prev : loc));
-    }
-  }
-
-  function applyStreetSuggestion(s: Suggestion) {
-    userEdit("street", s.label);
-    setShowStreetSugs(false);
-    if (s.lat && s.lon) onPickFromMap({ lat: s.lat, lng: s.lon });
-  }
 }

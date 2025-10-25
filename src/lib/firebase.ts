@@ -22,3 +22,5 @@ googleProvider.addScope("https://www.googleapis.com/auth/user.birthday.read");
 googleProvider.setCustomParameters({ prompt: "select_account" });
 
 export const db = getFirestore(app);
+
+export { app };
