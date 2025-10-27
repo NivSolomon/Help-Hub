@@ -200,11 +200,9 @@ function LocateControl({
       L.DomEvent.disableClickPropagation(container);
       L.DomEvent.on(btn, "click", async () => {
         if (userLoc) {
-          map.flyTo(
-            [userLoc.lat, userLoc.lng],
-            Math.max(map.getZoom(), 15),
-            { animate: true }
-          );
+          map.flyTo([userLoc.lat, userLoc.lng], Math.max(map.getZoom(), 15), {
+            animate: true,
+          });
           onLocate(userLoc);
           return;
         }
@@ -223,11 +221,9 @@ function LocateControl({
               lat: pos.coords.latitude,
               lng: pos.coords.longitude,
             };
-            map.flyTo(
-              [loc.lat, loc.lng],
-              Math.max(map.getZoom(), 15),
-              { animate: true }
-            );
+            map.flyTo([loc.lat, loc.lng], Math.max(map.getZoom(), 15), {
+              animate: true,
+            });
             onLocate(loc);
           } catch {
             /* swallow geolocation errors */
@@ -528,40 +524,37 @@ export default function NewRequestModal({
     }
   }, 300);
 
-  const debouncedFetchStreet = useDebounced(
-    async (q: string, city: string) => {
-      if (q.length < 2 || city.trim().length < 2) return setStreetSugs([]);
-      try {
-        const url = new URL("https://nominatim.openstreetmap.org/search");
-        url.searchParams.set("q", `${q} ${city}`);
-        url.searchParams.set("addressdetails", "1");
-        url.searchParams.set("limit", "5");
-        url.searchParams.set("countrycodes", COUNTRY);
+  const debouncedFetchStreet = useDebounced(async (q: string, city: string) => {
+    if (q.length < 2 || city.trim().length < 2) return setStreetSugs([]);
+    try {
+      const url = new URL("https://nominatim.openstreetmap.org/search");
+      url.searchParams.set("q", `${q} ${city}`);
+      url.searchParams.set("addressdetails", "1");
+      url.searchParams.set("limit", "5");
+      url.searchParams.set("countrycodes", COUNTRY);
 
-        const bbox = cityBBoxRef.current;
-        if (bbox) {
-          const [west, south, east, north] = bbox;
-          url.searchParams.set("viewbox", `${west},${north},${east},${south}`);
-          url.searchParams.set("bounded", "1");
-        }
-
-        const arr = (await fetchJson(url)) as any[];
-        const sugs: Suggestion[] = (arr || [])
-          .map((x) => ({
-            label: x.address?.road || shortName(x),
-            lat: x.lat ? Number(x.lat) : undefined,
-            lon: x.lon ? Number(x.lon) : undefined,
-          }))
-          .filter((s) => s.label)
-          .slice(0, 3);
-
-        setStreetSugs(sugs);
-      } catch {
-        setStreetSugs([]);
+      const bbox = cityBBoxRef.current;
+      if (bbox) {
+        const [west, south, east, north] = bbox;
+        url.searchParams.set("viewbox", `${west},${north},${east},${south}`);
+        url.searchParams.set("bounded", "1");
       }
-    },
-    300
-  );
+
+      const arr = (await fetchJson(url)) as any[];
+      const sugs: Suggestion[] = (arr || [])
+        .map((x) => ({
+          label: x.address?.road || shortName(x),
+          lat: x.lat ? Number(x.lat) : undefined,
+          lon: x.lon ? Number(x.lon) : undefined,
+        }))
+        .filter((s) => s.label)
+        .slice(0, 3);
+
+      setStreetSugs(sugs);
+    } catch {
+      setStreetSugs([]);
+    }
+  }, 300);
 
   /* user edits → mark dirty (map-driven edits do not) */
   function userEdit<K extends keyof Address>(key: K, value: Address[K]) {
@@ -763,9 +756,7 @@ export default function NewRequestModal({
 
             <div className="mt-2 text-xs text-gray-600">
               {picked
-                ? `Selected: ${picked.lat.toFixed(5)}, ${picked.lng.toFixed(
-                    5
-                  )}`
+                ? `Selected: ${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}`
                 : `Click the map to place a marker.`}
             </div>
           </div>
