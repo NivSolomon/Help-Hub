@@ -43,5 +43,8 @@
     "react-router-dom": "^7.9.4",
     "supercluster": "^8.0.1",
     "use-supercluster": "^1.2.0"
+  },
+  "optionalDependencies": {
+    "lightningcss-linux-x64-gnu": "1.30.2"
   }
 }

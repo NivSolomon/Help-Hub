@@ -958,13 +958,13 @@ export default function Home() {
                     Sync devices
                   </p>
                   <button
-                    onClick={handleGoogleSync}
+                  onClick={handleGoogleSync}
                     className="flex items-center justify-center gap-3 rounded-full border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-200 hover:text-indigo-600"
-                  >
+                >
                     <img src={googleLogo} alt="" className="h-5 w-5" />
-                    Continue with Google to sync devices
+                  Continue with Google to sync devices
                   </button>
-                </div>
+              </div>
 
                 <div className="rounded-3xl border border-white/50 bg-gradient-to-br from-indigo-500/10 via-white to-emerald-500/10 p-4 text-sm shadow-inner">
                   <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
@@ -974,7 +974,7 @@ export default function Home() {
                     <div className="rounded-2xl border border-white/60 bg-white/80 p-3 shadow-inner">
                       <div className="text-gray-500">Requests open</div>
                       <div className="text-lg font-semibold text-gray-900">{openItems.length}</div>
-                    </div>
+            </div>
                     <div className="rounded-2xl border border-white/60 bg-white/80 p-3 shadow-inner">
                       <div className="text-gray-500">Helping now</div>
                       <div className="text-lg font-semibold text-gray-900">{totalHelping}</div>

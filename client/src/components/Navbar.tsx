@@ -51,7 +51,7 @@ export default function Navbar() {
         onClick={() => navigate(`/u/${user?.uid ?? ""}`)}
         className="transition hover:text-black"
       >
-        My Profile
+            My Profile
       </button>
       {signedOutLinks}
     </>
@@ -130,27 +130,27 @@ export default function Navbar() {
               className="rounded-full border border-gray-200 px-4 py-1.5 font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
             >
               Sign in
-            </Link>
+          </Link>
           )}
         </div>
 
         <div className="sm:hidden">
-          {user ? (
-            <button
-              onClick={handleSignOut}
+        {user ? (
+          <button
+            onClick={handleSignOut}
               className="rounded-full border border-gray-200 px-3 py-1.5 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
-            >
-              Sign out
-            </button>
-          ) : (
-            <Link
-              to="/auth"
+          >
+            Sign out
+          </button>
+        ) : (
+          <Link
+            to="/auth"
               className="rounded-full border border-gray-200 px-3 py-1.5 text-sm font-semibold text-gray-800 transition hover:border-gray-300 hover:bg-gray-50"
-            >
-              Sign in
-            </Link>
-          )}
-        </div>
+          >
+            Sign in
+          </Link>
+        )}
+      </div>
       </div>
 
       {menuOpen && (
