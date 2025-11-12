@@ -2,7 +2,42 @@ import axios, { type AxiosRequestConfig, type Method } from "axios";
 
 import { auth } from "./firebase";
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:4000/api/v1";
+function trimTrailingSlash(value: string) {
+  return value.replace(/\/+$/, "");
+}
+
+function ensureLeadingSlash(value: string) {
+  const trimmed = value.replace(/^\/+/, "").replace(/\/+$/, "");
+  return `/${trimmed}`;
+}
+
+function resolveApiBase(): string {
+  const explicit = import.meta.env.VITE_API_URL;
+  if (typeof explicit === "string" && explicit.trim() !== "") {
+    return trimTrailingSlash(explicit.trim());
+  }
+
+  const basePath =
+    typeof import.meta.env.VITE_API_BASE_PATH === "string" &&
+    import.meta.env.VITE_API_BASE_PATH.trim() !== ""
+      ? ensureLeadingSlash(import.meta.env.VITE_API_BASE_PATH.trim())
+      : "/api/v1";
+
+  if (typeof window !== "undefined" && window.location) {
+    return `${trimTrailingSlash(window.location.origin)}${basePath}`;
+  }
+
+  const fallbackOrigin =
+    typeof import.meta.env.VITE_DEV_SERVER_URL === "string" &&
+    import.meta.env.VITE_DEV_SERVER_URL.trim() !== ""
+      ? trimTrailingSlash(import.meta.env.VITE_DEV_SERVER_URL.trim())
+      : "http://localhost:4000";
+
+  return `${fallbackOrigin}${basePath}`;
+}
+
+export const API_BASE = resolveApiBase();
+
 const http = axios.create({
   baseURL: API_BASE,
 });
@@ -46,8 +81,10 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   }
 
   const buildConfig = (): AxiosRequestConfig => {
+    const relativePath = path.startsWith("/") ? path.slice(1) : path;
+
     const config: AxiosRequestConfig = {
-      url: path,
+      url: relativePath,
       method: method as Method,
       headers: Object.fromEntries(requestHeaders.entries()),
       params,
