@@ -1,23 +1,14 @@
-import http from 'node:http';
-
-import app from './app';
+import express from 'express';
+import cors from 'cors';
 import { env } from './config/env';
+import authRoutes from './routes/v1/auth.routes';
 
-const port = env.PORT;
-const server = http.createServer(app);
+const app = express();
+app.use(cors());
+app.use(express.json());
 
-server.listen(port, () => {
-  console.log(`API server ready on http://localhost:${port} (${env.NODE_ENV})`);
+app.use('/api/v1/auth', authRoutes);
+
+app.listen(env.PORT, () => {
+  console.log(`API server ready on http://localhost:${env.PORT} (${env.NODE_ENV})`);
 });
-
-const shutdown = (signal: string) => {
-  console.info(`Received ${signal}. Gracefully shutting down.`);
-  server.close(() => {
-    console.info('Server closed');
-    process.exit(0);
-  });
-};
-
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
-
