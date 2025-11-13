@@ -206,14 +206,12 @@ function AdminSurface() {
                           >
                             View on map
                           </button>
-                          {req.status === "open" && (
-                            <button
-                              className="rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50"
-                              onClick={() => handleDeleteRequest(req.id)}
-                            >
-                              Delete
-                            </button>
-                          )}
+                          <button
+                            className="rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-600 transition hover:bg-rose-50"
+                            onClick={() => handleDeleteRequest(req.id)}
+                          >
+                            Delete
+                          </button>
                         </div>
                       </td>
                     </tr>

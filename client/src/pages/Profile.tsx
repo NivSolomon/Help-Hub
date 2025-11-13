@@ -189,6 +189,9 @@ export default function ProfilePage() {
 
   // cache reviewer display names so we don't fetch repeatedly
   const reviewerNameCacheRef = React.useRef<Record<string, string>>({});
+  const [reviewImageErrors, setReviewImageErrors] = React.useState<
+    Record<string, boolean>
+  >({});
 
   async function getReviewerName(uid: string): Promise<string> {
     if (reviewerNameCacheRef.current[uid]) {
@@ -321,6 +324,18 @@ export default function ProfilePage() {
       setReviewsPage(totalReviewsPages - 1);
     }
   }, [totalReviewsPages, reviewsPage]);
+
+  React.useEffect(() => {
+    setReviewImageErrors((prev) => {
+      const next: Record<string, boolean> = {};
+      for (const rev of reviews) {
+        if (prev[rev.id]) {
+          next[rev.id] = true;
+        }
+      }
+      return next;
+    });
+  }, [reviews]);
 
   /* ------------------------------------------------------------------
      HISTORY STATE (me only)
@@ -913,13 +928,36 @@ export default function ProfilePage() {
                         </blockquote>
                       )}
 
-                      {rev.imageUrl && (
-                        <div className="overflow-hidden rounded-xl border border-white/70 shadow-inner">
-                          <img
-                            src={rev.imageUrl}
-                            alt="review attachment"
-                            className="max-h-40 w-full object-cover"
-                          />
+                      {rev.imageUrl && !reviewImageErrors[rev.id] && (
+                        <figure className="overflow-hidden rounded-xl border border-white/70 bg-white/70 shadow-inner transition hover:shadow-lg">
+                          <a
+                            href={rev.imageUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="group relative block"
+                          >
+                            <img
+                              src={rev.imageUrl}
+                              alt="Review attachment"
+                              loading="lazy"
+                              className="max-h-48 w-full object-cover transition duration-200 ease-out group-hover:scale-[1.02]"
+                              onError={() =>
+                                setReviewImageErrors((prev) => ({
+                                  ...prev,
+                                  [rev.id]: true,
+                                }))
+                              }
+                            />
+                            <span className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent opacity-0 transition-opacity group-hover:opacity-100" />
+                            <span className="pointer-events-none absolute bottom-2 right-2 rounded-full bg-black/60 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-white shadow">
+                              View full
+                            </span>
+                          </a>
+                        </figure>
+                      )}
+                      {rev.imageUrl && reviewImageErrors[rev.id] && (
+                        <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50/90 p-3 text-xs text-gray-500">
+                          Image unavailable or removed.
                         </div>
                       )}
                     </div>

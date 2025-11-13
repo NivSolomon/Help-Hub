@@ -35,6 +35,7 @@ import {
   createReviewPromptsForBoth,
   listenMyReviewPrompts,
   submitReview,
+  uploadReviewImage,
 } from "../lib/reviews";
 
 import { CATEGORIES, type Category, type HelpRequest } from "../lib/types";
@@ -105,6 +106,31 @@ function areHelpRequestListsEqual(
   return true;
 }
 
+function useWindowSize() {
+  const isClient = typeof window !== "undefined";
+  const [size, setSize] = React.useState(() => ({
+    width: isClient ? window.innerWidth : 0,
+    height: isClient ? window.innerHeight : 0,
+  }));
+
+  React.useEffect(() => {
+    if (!isClient) return;
+    function handleResize() {
+      setSize({
+        width: window.innerWidth,
+        height: window.innerHeight,
+      });
+    }
+    handleResize();
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+    };
+  }, [isClient]);
+
+  return size;
+}
+
 export default function Home() {
   console.log("Home render");
   const navigate = useNavigate();
@@ -124,7 +150,13 @@ export default function Home() {
   const [center, setCenter] = React.useState({ lat: 32.0853, lng: 34.7818 });
   const [userLoc, setUserLoc] = React.useState<{ lat: number; lng: number }>();
 
-  const [radiusKm, setRadiusKm] = React.useState(5);
+  const [radiusInput, setRadiusInput] = React.useState("5");
+  const radiusKm = React.useMemo(() => {
+    if (radiusInput.trim() === "") return 0;
+    const parsed = Number(radiusInput);
+    if (!Number.isFinite(parsed)) return 0;
+    return Math.max(parsed, 0);
+  }, [radiusInput]);
   const [categoryFilter, setCategoryFilter] = React.useState<
     Category | "all"
   >("all");
@@ -155,6 +187,8 @@ export default function Home() {
   const myId = user?.uid ?? null;
   const isAdmin = Boolean(profile?.isAdmin ?? profile?.roles?.admin);
   const [showOnboardingPrompt, setShowOnboardingPrompt] = React.useState(false);
+
+  const windowSize = useWindowSize();
 
   // Cache for requester/helper quick lookup
   const userCacheRef = React.useRef<Record<string, any>>({});
@@ -886,11 +920,23 @@ export default function Home() {
   return (
     <AuthGate>
       <Navbar />
-      {showConfetti && (
+      {showConfetti && windowSize.width > 0 && (
         <>
-          <Confetti recycle={false} numberOfPieces={320} />
-          <div className="pointer-events-none fixed inset-0 flex items-center justify-center text-2xl font-semibold text-white drop-shadow-lg">
-            🎉 Great job helping!
+          <Confetti
+            recycle={false}
+            numberOfPieces={420}
+            width={Math.max(windowSize.width, 320)}
+            height={Math.max(windowSize.height, 320)}
+            gravity={0.35}
+            wind={0.01}
+            tweenDuration={5200}
+            colors={["#6366f1", "#34d399", "#fbbf24", "#f472b6", "#60a5fa"]}
+            run
+          />
+          <div className="pointer-events-none fixed inset-0 flex items-center justify-center">
+            <div className="rounded-full bg-black/45 px-5 py-3 text-lg font-semibold text-white shadow-xl shadow-indigo-500/30 backdrop-blur">
+              🎉 Great job helping!
+            </div>
           </div>
         </>
       )}
@@ -908,9 +954,23 @@ export default function Home() {
         onClose={() => setReviewOpen(false)}
         otherName={reviewContext?.otherName}
         requestTitle={reviewContext?.requestTitle ?? undefined}
-        onSubmit={async (rating, comment /* , imageFile */) => {
+        onSubmit={async (rating, comment, imageFile) => {
           if (!myId || !reviewContext) return;
-          const imageUrl = null;
+          let imageUrl: string | null = null;
+          if (imageFile) {
+            try {
+              imageUrl = await uploadReviewImage(imageFile, {
+                requestId: reviewContext.requestId,
+                reviewerId: myId,
+              });
+            } catch (error) {
+              console.error("Failed to upload review image", error);
+              notify({
+                message: "Photo upload failed. Review submitted without image.",
+                variant: "warning",
+              });
+            }
+          }
           await submitReview(
             reviewContext.requestId,
             myId,
@@ -932,10 +992,10 @@ export default function Home() {
           <span className="absolute right-[-12%] top-40 h-64 w-64 rounded-full bg-emerald-200/40 blur-3xl" />
           <span className="absolute bottom-[-10%] left-[20%] h-64 w-64 rounded-full bg-purple-200/35 blur-3xl" />
         </div>
-        <main className="relative mx-auto flex max-w-6xl flex-col gap-6 px-4 py-8 sm:px-6">
-          <ScrollReveal className="rounded-3xl border border-white/40 bg-white/85 p-6 shadow-xl backdrop-blur">
-            <header className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-              <div className="space-y-4">
+        <main className="relative mx-auto flex max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
+          <ScrollReveal className="rounded-3xl border border-white/40 bg-white/85 p-5 shadow-xl backdrop-blur sm:p-6">
+            <header className="grid gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+              <div className="space-y-3">
                 <div className="inline-flex items-center gap-2 rounded-full border border-indigo-100 bg-indigo-50/70 px-3 py-1 text-xs font-semibold text-indigo-600">
                   <span role="img" aria-hidden>
                     📡
@@ -950,9 +1010,62 @@ export default function Home() {
                 <p className="text-sm text-gray-600 sm:text-base">
                   Watch the map update in real-time, claim a task, chat with the requester, and mark it done to celebrate together.
                 </p>
+
+                <div className="grid gap-3 pt-2 sm:grid-cols-3 sm:gap-4">
+                  {[
+                    {
+                      icon: "🗺️",
+                      title: "Live neighborhood feed",
+                      subtitle: "Requests refresh as soon as they’re posted nearby.",
+                    },
+                    {
+                      icon: "💬",
+                      title: "Instant coordination",
+                      subtitle: "Accept a request and jump straight into chat to align details.",
+                    },
+                    {
+                      icon: "🎉",
+                      title: "Share the win",
+                      subtitle: "Mark it done, exchange reviews, and unlock a confetti celebration.",
+                    },
+                  ].map((card) => (
+                    <article
+                      key={card.title}
+                      className="rounded-2xl border border-white/60 bg-white/70 px-3 py-3 shadow-inner shadow-indigo-100/50 backdrop-blur"
+                    >
+                      <div className="flex items-start gap-2">
+                        <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-indigo-100 text-base">
+                          {card.icon}
+                        </span>
+                        <div className="text-left">
+                          <h3 className="text-sm font-semibold text-gray-900 leading-tight">
+                            {card.title}
+                          </h3>
+                          <p className="mt-1 text-xs text-gray-500 leading-snug">
+                            {card.subtitle}
+                          </p>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
               </div>
 
-              <div className="flex flex-col justify-between gap-4">
+              <div className="flex flex-col gap-3 sm:gap-4">
+                <div className="rounded-3xl border border-white/50 bg-gradient-to-br from-indigo-500/10 via-white to-emerald-500/10 p-4 shadow-inner">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                    Need help now?
+                  </p>
+                  <p className="mt-1 text-sm text-gray-600">
+                    Post a new request so nearby helpers can see it right away.
+                  </p>
+                  <button
+                    onClick={() => setOpenModal(true)}
+                    className="mt-3 inline-flex w-full items-center justify-center rounded-full bg-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5 hover:bg-indigo-500"
+                  >
+                    Create new request
+                  </button>
+                </div>
                 <div className="space-y-3 rounded-3xl border border-white/50 bg-white/80 p-4 shadow-inner shadow-indigo-100/40">
                   <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
                     Sync devices
@@ -990,10 +1103,17 @@ export default function Home() {
                   Radius (km)
                 </label>
                 <input
-                  value={radiusKm}
+                  value={radiusInput}
                   onChange={(event) => {
-                    const raw = Number(event.target.value);
-                    setRadiusKm(Number.isNaN(raw) ? 0 : raw);
+                    setRadiusInput(event.target.value);
+                  }}
+                  onBlur={() => {
+                    setRadiusInput((current) => {
+                      if (current.trim() === "") return "";
+                      const parsed = Number(current);
+                      if (!Number.isFinite(parsed)) return "";
+                      return String(Math.max(parsed, 0));
+                    });
                   }}
                   className="mt-2 w-full rounded-xl border border-gray-200 bg-white/80 px-4 py-2 text-sm shadow-inner focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-200"
                   type="number"
@@ -1038,7 +1158,7 @@ export default function Home() {
               <div className="flex items-end">
                 <button
                   onClick={() => {
-                    setRadiusKm(5);
+                    setRadiusInput("5");
                     setCategoryFilter("all");
                   }}
                   className="w-full rounded-xl border border-gray-200 bg-white/80 px-4 py-2 text-sm font-semibold text-gray-700 shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-200 hover:text-indigo-600"

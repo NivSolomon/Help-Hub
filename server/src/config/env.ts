@@ -39,6 +39,9 @@ const envSchema = z.object({
       val ? ['true', '1', 'yes'].includes(val.toLowerCase()) : undefined
     ),
   MAIL_FROM: z.string().optional(),
+  NOMINATIM_EMAIL: z.string().email().optional(),
+  NOMINATIM_USER_AGENT: z.string().optional(),
+  NOMINATIM_LANGUAGE: z.string().optional()
 });
 
 const parsed = envSchema.safeParse(process.env);

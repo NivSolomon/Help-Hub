@@ -8,6 +8,7 @@ import { usersRouter } from './users.routes';
 import { supportRouter } from './support.routes';
 import { authRouter } from './auth.routes';
 import { adminRouter } from './admin.routes';
+import { geoRouter } from './geo.routes';
 
 const router = Router();
 
@@ -19,6 +20,7 @@ router.use('/chats', chatsRouter);
 router.use('/support', supportRouter);
 router.use('/auth', authRouter);
 router.use('/admin', adminRouter);
+router.use('/geo', geoRouter);
 
 export { router };
 

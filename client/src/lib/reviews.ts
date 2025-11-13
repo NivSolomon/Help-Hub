@@ -1,4 +1,6 @@
 import { apiFetch } from "./api";
+import { storage } from "./firebase";
+import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
 
 /* -----------------------------------------------------------------------------
    Types
@@ -26,6 +28,34 @@ export type Review = {
 
   createdAt?: any;      // serverTimestamp
 };
+
+function safeExtensionFromFilename(name: string | undefined): string {
+  if (!name) return "jpg";
+  const lastDot = name.lastIndexOf(".");
+  if (lastDot === -1 || lastDot === name.length - 1) return "jpg";
+  const ext = name.slice(lastDot + 1).toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (!ext) return "jpg";
+  if (ext.length > 6) return ext.slice(0, 6);
+  return ext;
+}
+
+export async function uploadReviewImage(
+  file: File,
+  opts: { requestId: string; reviewerId: string }
+): Promise<string> {
+  const { requestId, reviewerId } = opts;
+  const ext = safeExtensionFromFilename(file.name);
+  const key = `reviews/${requestId}/${reviewerId}-${Date.now()}.${ext}`;
+
+  const metadata =
+    file.type && file.type.trim() !== ""
+      ? { contentType: file.type }
+      : undefined;
+
+  const storageRef = ref(storage, key);
+  await uploadBytes(storageRef, file, metadata);
+  return getDownloadURL(storageRef);
+}
 
 /* -----------------------------------------------------------------------------
    createReviewPromptsForBoth
