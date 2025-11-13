@@ -1,6 +1,11 @@
 export default {
-  plugins: {
-    "@tailwindcss/postcss": {},
-    autoprefixer: {},
-  },
+  plugins: process.env.TAILWIND_DISABLE_LIGHTNINGCSS
+    ? {
+        tailwindcss: {},
+        autoprefixer: {},
+      }
+    : {
+        "@tailwindcss/postcss": {},
+        autoprefixer: {},
+      },
 };
